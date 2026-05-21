@@ -16,32 +16,49 @@
     <!-- Sidebar Navigation -->
     <aside class="sidebar" id="app-sidebar">
       <div class="brand">
-        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#grad-logo)" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <defs>
-            <linearGradient id="grad-logo" x1="2" y1="2" x2="22" y2="12" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#8b5cf6"/>
-              <stop offset="1" stop-color="#06b6d4"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        <span class="brand-name">Antigravity</span>
+        <div class="brand-info">
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#grad-logo)" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="grad-logo" x1="2" y1="2" x2="22" y2="12" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#8b5cf6"/>
+                <stop offset="1" stop-color="#06b6d4"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span class="brand-name">Antigravity</span>
+        </div>
+        <button class="brand-toggle-btn" id="brand-toggle-btn" onclick="toggleSidebar()" title="Collapse Sidebar">
+          <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="11 17 6 12 11 7"></polyline>
+            <polyline points="18 17 13 12 18 7"></polyline>
+          </svg>
+        </button>
       </div>
 
       <nav class="nav-menu">
         <button class="nav-btn active" id="nav-dashboard" onclick="switchView('dashboard')">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
-          Dashboard
+          <span class="nav-text">Dashboard</span>
         </button>
         <button class="nav-btn" id="nav-courses" onclick="switchView('courses')">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5L4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/></svg>
-          Course Catalog
+          <span class="nav-text">Course Catalog</span>
         </button>
         <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Settings
+          <span class="nav-text">Settings</span>
+        </button>
+        
+        <!-- Toggle Sidebar Button -->
+        <button class="nav-btn toggle-sidebar-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse Sidebar" style="margin-top: auto;">
+          <svg class="nav-icon toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="11 17 6 12 11 7"></polyline>
+            <polyline points="18 17 13 12 18 7"></polyline>
+          </svg>
+          <span class="nav-text">Collapse Sidebar</span>
         </button>
       </nav>
 
@@ -273,6 +290,21 @@
                       </div>
                     </div>
                     <div class="controls-right">
+                      <div class="shortcuts-container">
+                        <button class="control-btn" id="video-shortcuts-btn" onclick="toggleShortcutsMenu()" title="Keyboard Shortcuts (?)">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        </button>
+                        <div class="shortcuts-menu" id="shortcuts-dropdown-menu">
+                          <div class="shortcuts-header">Keyboard Shortcuts</div>
+                          <div class="shortcut-item"><span class="shortcut-key">Space</span><span class="shortcut-desc">Play / Pause</span></div>
+                          <div class="shortcut-item"><span class="shortcut-key">← / →</span><span class="shortcut-desc">Seek 10s</span></div>
+                          <div class="shortcut-item"><span class="shortcut-key">↑ / ↓</span><span class="shortcut-desc">Volume +/- 5%</span></div>
+                          <div class="shortcut-item"><span class="shortcut-key">[ / ]</span><span class="shortcut-desc">Speed +/- 0.1x</span></div>
+                          <div class="shortcut-item"><span class="shortcut-key">F</span><span class="shortcut-desc">Fullscreen</span></div>
+                          <div class="shortcut-item"><span class="shortcut-key">M</span><span class="shortcut-desc">Mute / Unmute</span></div>
+                          <div class="shortcut-item"><span class="shortcut-key">P</span><span class="shortcut-desc">Picture-in-Picture</span></div>
+                        </div>
+                      </div>
                       <div class="speed-container">
                         <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
                         <div class="speed-menu" id="speed-dropdown-menu">
@@ -286,7 +318,10 @@
                           <button onclick="setPlaybackRate(3.0)">3.0x</button>
                         </div>
                       </div>
-                      <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen">
+                      <button class="control-btn" id="video-pip-btn" onclick="togglePictureInPicture()" title="Picture-in-Picture (P)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="13" y="12" width="7" height="6" rx="1" fill="currentColor"/></svg>
+                      </button>
+                      <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen (F)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
                       </button>
                     </div>

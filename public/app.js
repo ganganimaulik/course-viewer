@@ -48,19 +48,39 @@ function displayPath(fullPath) {
 // --- INIT APP ---
 document.addEventListener('DOMContentLoaded', () => {
   initVideoPlayerEvents();
-  refreshCatalog();
+  refreshCatalog(true);
   
-  // Close speed dropdown when clicking outside
+  // Restore sidebar state
+  if (localStorage.getItem('sidebar-collapsed') === 'true') {
+    const sidebar = document.getElementById('app-sidebar');
+    if (sidebar) sidebar.classList.add('collapsed');
+    
+    const titleText = 'Expand Sidebar';
+    const brandBtn = document.getElementById('brand-toggle-btn');
+    const navBtn = document.getElementById('sidebar-toggle-btn');
+    if (brandBtn) brandBtn.setAttribute('title', titleText);
+    if (navBtn) navBtn.setAttribute('title', titleText);
+  }
+  
+  // Close speed and shortcuts dropdowns when clicking outside
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.speed-container')) {
-      document.getElementById('speed-dropdown-menu').classList.remove('active');
+      const speedMenu = document.getElementById('speed-dropdown-menu');
+      if (speedMenu) speedMenu.classList.remove('active');
+    }
+    if (!e.target.closest('.shortcuts-container')) {
+      const shortcutsMenu = document.getElementById('shortcuts-dropdown-menu');
+      if (shortcutsMenu) shortcutsMenu.classList.remove('active');
     }
   });
+
+  initKeyboardShortcuts();
 });
 
 // --- ROUTING / VIEW SWITCHER ---
 function switchView(viewId) {
   state.view = viewId;
+  localStorage.setItem('current-view', viewId);
   
   // Pause video player if we leave workspace
   if (viewId !== 'workspace') {
@@ -94,8 +114,29 @@ function switchView(viewId) {
   }
 }
 
+function restoreLastView() {
+  const savedView = localStorage.getItem('current-view');
+  if (!savedView) return;
+
+  if (savedView === 'workspace') {
+    const savedCourseId = localStorage.getItem('current-course-id');
+    if (savedCourseId) {
+      const course = state.courses.find(c => c.id === savedCourseId);
+      if (course) {
+        const savedItemPath = localStorage.getItem('current-item-path');
+        openCourse(savedCourseId, savedItemPath);
+        return;
+      }
+    }
+  }
+
+  if (['dashboard', 'courses', 'settings'].includes(savedView)) {
+    switchView(savedView);
+  }
+}
+
 // --- FETCH & DATA SYNC ---
-async function refreshCatalog() {
+async function refreshCatalog(isInitialLoad = false) {
   const refreshBtn = document.getElementById('refresh-courses-btn');
   if (refreshBtn) {
     refreshBtn.disabled = true;
@@ -123,6 +164,10 @@ async function refreshCatalog() {
         document.getElementById('workspace-course-progress').textContent = `${updatedCourse.progressPercent}% Completed`;
         renderActiveWorkspaceOutline();
       }
+    }
+
+    if (isInitialLoad) {
+      restoreLastView();
     }
   } catch (err) {
     console.error('Error fetching data:', err);
@@ -405,45 +450,77 @@ function resumePlayback(item) {
 }
 
 // Open Course outline view
-function openCourse(courseId) {
+function openCourse(courseId, restoreItemPath = null) {
   const course = state.courses.find(c => c.id === courseId);
   if (!course) return;
 
   state.currentCourse = course;
+  localStorage.setItem('current-course-id', courseId);
+  if (!restoreItemPath) {
+    localStorage.removeItem('current-item-path');
+  }
   switchView('workspace');
 
   document.getElementById('workspace-course-title').textContent = course.title;
   document.getElementById('workspace-course-progress').textContent = `${course.progressPercent}% Completed`;
   
-  // Reset tab to lessons
-  state.currentWorkspaceTab = 'lessons';
+  // Restore tab
+  const storedTab = localStorage.getItem('current-workspace-tab') || 'lessons';
+  state.currentWorkspaceTab = storedTab;
   const tabLessons = document.getElementById('tab-lessons');
   const tabResources = document.getElementById('tab-resources');
-  if (tabLessons) tabLessons.classList.add('active');
-  if (tabResources) tabResources.classList.remove('active');
+  if (tabLessons) {
+    if (storedTab === 'lessons') tabLessons.classList.add('active');
+    else tabLessons.classList.remove('active');
+  }
+  if (tabResources) {
+    if (storedTab === 'resources') tabResources.classList.add('active');
+    else tabResources.classList.remove('active');
+  }
   
   const listLessons = document.getElementById('course-outline-list');
   const listResources = document.getElementById('course-resources-list');
-  if (listLessons) listLessons.style.display = 'block';
-  if (listResources) listResources.style.display = 'none';
+  if (listLessons) listLessons.style.display = storedTab === 'lessons' ? 'block' : 'none';
+  if (listResources) listResources.style.display = storedTab === 'resources' ? 'block' : 'none';
 
   const searchInput = document.getElementById('outline-search');
   if (searchInput) {
     searchInput.value = '';
-    searchInput.placeholder = 'Search lectures...';
+    searchInput.placeholder = storedTab === 'lessons' ? 'Search lectures...' : 'Search resources...';
   }
 
   renderActiveWorkspaceOutline();
 
-  // Load blank state viewer
-  showViewerPanel('blank');
-  document.getElementById('file-actions-bar').style.display = 'none';
+  // Load blank state viewer or restored item
+  if (restoreItemPath) {
+    let foundItem = null;
+    let foundSection = null;
+    course.sections.forEach(sec => {
+      const it = sec.items.find(i => i.path === restoreItemPath);
+      if (it) {
+        foundItem = it;
+        foundSection = sec;
+      }
+    });
+
+    if (foundItem) {
+      selectItem(foundItem, foundSection);
+    } else {
+      showViewerPanel('blank');
+      document.getElementById('file-actions-bar').style.display = 'none';
+    }
+  } else {
+    showViewerPanel('blank');
+    document.getElementById('file-actions-bar').style.display = 'none';
+  }
   
   // Set breadcrumbs initial
   document.getElementById('crumb-course').textContent = 'Dashboard';
   document.getElementById('crumb-section').textContent = course.title;
-  document.getElementById('crumb-item').textContent = '';
-  document.getElementById('crumb-item').classList.remove('active');
+  if (!restoreItemPath) {
+    document.getElementById('crumb-item').textContent = '';
+    document.getElementById('crumb-item').classList.remove('active');
+  }
 }
 
 // Renders Accordion Directory outline for Lessons (videos, pdf, html, text)
@@ -641,6 +718,7 @@ function renderCourseResources() {
 function switchWorkspaceTab(tabName) {
   if (tabName !== 'lessons' && tabName !== 'resources') return;
   state.currentWorkspaceTab = tabName;
+  localStorage.setItem('current-workspace-tab', tabName);
 
   const tabLessons = document.getElementById('tab-lessons');
   const tabResources = document.getElementById('tab-resources');
@@ -703,6 +781,7 @@ function selectItem(item, section = null) {
   cancelAutoplay();
 
   state.currentItem = item;
+  localStorage.setItem('current-item-path', item.path);
   if (section) {
     state.currentSection = section;
   } else {
@@ -770,16 +849,22 @@ function showViewerPanel(type) {
     other: 'viewer-other-container'
   };
 
+  const targetPanelId = panels[type];
+
   Object.keys(panels).forEach(key => {
-    const el = document.getElementById(panels[key]);
+    const panelId = panels[key];
+    const el = document.getElementById(panelId);
     if (!el) return;
-    if (panels[key] === panels[type]) {
-      el.style.display = panels[key] === 'viewer-blank' ? 'flex' : 'block';
-      if (panels[key] === 'viewer-blank') el.classList.add('active');
+
+    if (panelId === targetPanelId) {
+      el.style.display = ''; // Clear inline override, letting CSS define display style
+      if (panelId === 'viewer-blank') {
+        el.classList.add('active');
+      }
     } else {
-      if (panels[key] !== panels[type]) {
-        el.style.display = 'none';
-        if (panels[key] === 'viewer-blank') el.classList.remove('active');
+      el.style.display = 'none';
+      if (panelId === 'viewer-blank') {
+        el.classList.remove('active');
       }
     }
   });
@@ -833,6 +918,17 @@ function initVideoPlayerEvents() {
     saveVideoProgress(true, true); // Save as completed
     triggerAutoplayCountdown();
   });
+
+  video.addEventListener('enterpictureinpicture', () => {
+    showToast('Picture-in-Picture active');
+  });
+
+  video.addEventListener('leavepictureinpicture', () => {
+    showToast('Returned to main player');
+  });
+
+  // Initialize Volume UI
+  updateVolumeUI();
 }
 
 function loadVideoPlayer(item) {
@@ -872,14 +968,11 @@ function togglePlay() {
 
 function toggleMute() {
   const video = document.getElementById('main-video-player');
-  const volumeIcon = document.getElementById('volume-icon');
-  
   video.muted = !video.muted;
-  if (video.muted) {
-    volumeIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/></svg>';
-  } else {
-    volumeIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+  if (!video.muted && video.volume === 0) {
+    video.volume = 0.5; // restore to 50% if volume was 0 when unmuting
   }
+  updateVolumeUI();
 }
 
 function onVolumeSliderChange() {
@@ -887,6 +980,133 @@ function onVolumeSliderChange() {
   const slider = document.getElementById('video-volume-slider');
   video.volume = slider.value;
   video.muted = (slider.value == 0);
+  updateVolumeUI();
+}
+
+function updateVolumeUI() {
+  const video = document.getElementById('main-video-player');
+  const slider = document.getElementById('video-volume-slider');
+  const volumeIcon = document.getElementById('volume-icon');
+  
+  if (slider) {
+    slider.value = video.muted ? 0 : video.volume;
+  }
+  
+  if (volumeIcon) {
+    if (video.muted || video.volume === 0) {
+      volumeIcon.innerHTML = '<line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>';
+    } else {
+      volumeIcon.innerHTML = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>';
+    }
+  }
+}
+
+function toggleShortcutsMenu() {
+  const menu = document.getElementById('shortcuts-dropdown-menu');
+  if (menu) menu.classList.toggle('active');
+}
+
+async function togglePictureInPicture() {
+  const video = document.getElementById('main-video-player');
+  if (!video) return;
+  
+  try {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+    } else if (document.pictureInPictureEnabled) {
+      await video.requestPictureInPicture();
+    } else {
+      showToast('Picture-in-Picture is not supported in this browser.');
+    }
+  } catch (err) {
+    console.error('PiP Error:', err);
+    showToast('Failed to toggle Picture-in-Picture');
+  }
+}
+
+function initKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    // Ignore when typing in input/textarea/contenteditable fields
+    if (document.activeElement && (
+      document.activeElement.tagName === 'INPUT' ||
+      document.activeElement.tagName === 'TEXTAREA' ||
+      document.activeElement.isContentEditable
+    )) {
+      return;
+    }
+
+    // Only run shortcut actions if viewing the workspace and currently loaded item is a video
+    if (state.view !== 'workspace' || !state.currentItem || state.currentItem.type !== 'video') {
+      return;
+    }
+
+    const video = document.getElementById('main-video-player');
+    if (!video) return;
+
+    switch (e.key) {
+      case ' ':
+        e.preventDefault();
+        togglePlay();
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        video.currentTime = Math.max(0, video.currentTime - 10);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        video.currentTime = Math.min(video.duration || 0, video.currentTime + 10);
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        {
+          const newVol = Math.min(1.0, video.volume + 0.05);
+          video.volume = newVol;
+          video.muted = false;
+          updateVolumeUI();
+        }
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        {
+          const newVol = Math.max(0.0, video.volume - 0.05);
+          video.volume = newVol;
+          video.muted = (newVol === 0);
+          updateVolumeUI();
+        }
+        break;
+      case '[':
+        e.preventDefault();
+        {
+          const newRate = Math.max(0.1, state.playbackRate - 0.1);
+          setPlaybackRate(newRate);
+          showToast(`Speed: ${newRate.toFixed(2)}x`);
+        }
+        break;
+      case ']':
+        e.preventDefault();
+        {
+          const newRate = Math.min(16.0, state.playbackRate + 0.1);
+          setPlaybackRate(newRate);
+          showToast(`Speed: ${newRate.toFixed(2)}x`);
+        }
+        break;
+      case 'f':
+      case 'F':
+        e.preventDefault();
+        toggleFullscreen();
+        break;
+      case 'm':
+      case 'M':
+        e.preventDefault();
+        toggleMute();
+        break;
+      case 'p':
+      case 'P':
+        e.preventDefault();
+        togglePictureInPicture();
+        break;
+    }
+  });
 }
 
 function onVideoSliderChange() {
@@ -1406,3 +1626,21 @@ async function confirmResetCourseProgressCard(event, courseId, courseTitle) {
     showToast('Failed to reset course progress');
   }
 }
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('app-sidebar');
+  if (!sidebar) return;
+  
+  const isCollapsed = sidebar.classList.toggle('collapsed');
+  
+  // Store state in localStorage
+  localStorage.setItem('sidebar-collapsed', isCollapsed ? 'true' : 'false');
+  
+  // Update tooltip/title for both buttons
+  const titleText = isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar';
+  const brandBtn = document.getElementById('brand-toggle-btn');
+  const navBtn = document.getElementById('sidebar-toggle-btn');
+  if (brandBtn) brandBtn.setAttribute('title', titleText);
+  if (navBtn) navBtn.setAttribute('title', titleText);
+}
+
