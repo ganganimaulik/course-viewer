@@ -1079,6 +1079,7 @@ h1 {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  cursor: pointer;
 }
 
 /* Cue text track styling (if supported by browser natively, else we use standard track) */

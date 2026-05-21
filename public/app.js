@@ -784,6 +784,10 @@ function initVideoPlayerEvents() {
   const playBtn = document.getElementById('video-play-btn');
   const slider = document.getElementById('video-progress-slider');
   
+  video.addEventListener('click', () => {
+    togglePlay();
+  });
+
   video.addEventListener('play', () => {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
     startProgressInterval();
