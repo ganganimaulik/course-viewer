@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Course Viewer & Tracker</title>
+  <!-- Google Fonts: Outfit (headings) & Inter (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="app-sidebar">
+      <div class="brand">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#grad-logo)" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="grad-logo" x1="2" y1="2" x2="22" y2="12" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b5cf6"/>
+              <stop offset="1" stop-color="#06b6d4"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="brand-name">Antigravity</span>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-btn active" id="nav-dashboard" onclick="switchView('dashboard')">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+          Dashboard
+        </button>
+        <button class="nav-btn" id="nav-courses" onclick="switchView('courses')">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5L4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/></svg>
+          Course Catalog
+        </button>
+        <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+      </nav>
+
+      <!-- Sidebar Statistics Box -->
+      <div class="sidebar-stats">
+        <div class="stats-title">All-Time Progress</div>
+        <div class="stat-row">
+          <span class="stat-label">Hours Watched</span>
+          <span class="stat-val" id="stat-hours">0.0h</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Active Courses</span>
+          <span class="stat-val" id="stat-active-courses">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Completed Files</span>
+          <span class="stat-val" id="stat-completed-files">0</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- ================== VIEW: DASHBOARD ================== -->
+      <section id="view-dashboard" class="content-view active">
+        <div class="view-header">
+          <div>
+            <h1>Dashboard</h1>
+            <p class="subtitle" id="welcome-msg">Welcome! Let's continue learning today.</p>
+          </div>
+          <button class="primary-btn" id="refresh-courses-btn" onclick="refreshCatalog()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Refresh Folders
+          </button>
+        </div>
+
+        <!-- Dashboard Resume Section -->
+        <div class="resume-section" id="resume-container">
+          <h2 class="section-heading">Continue Learning</h2>
+          <div class="resume-grid" id="resume-grid">
+            <!-- Dynamically populated card slots -->
+          </div>
+        </div>
+
+        <!-- Dashboard Course Catalog Gallery -->
+        <div class="catalog-section">
+          <div class="catalog-header-bar">
+            <h2 class="section-heading">Courses</h2>
+            <div class="filters-bar">
+              <input type="text" id="catalog-search" class="search-input" placeholder="Search courses..." oninput="filterCourses()">
+              <select id="catalog-filter-status" class="filter-select" onchange="filterCourses()">
+                <option value="all">All Progress Statuses</option>
+                <option value="active">Active Only</option>
+                <option value="completed">Completed Only</option>
+                <option value="notstarted">Not Started Only</option>
+              </select>
+              <select id="catalog-filter-source" class="filter-select" onchange="filterCourses()">
+                <option value="all">All Source Paths</option>
+                <!-- Dynamically populated directories -->
+              </select>
+            </div>
+          </div>
+          
+          <div class="courses-grid" id="courses-grid">
+            <!-- Dynamically populated course cards -->
+          </div>
+        </div>
+      </section>
+
+      <!-- ================== VIEW: COURSE CATALOG (ALL) ================== -->
+      <section id="view-courses" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1>Course Catalog</h1>
+            <p class="subtitle">Browse and select your courses to begin learning.</p>
+          </div>
+        </div>
+        
+        <div class="catalog-list-wrapper">
+          <!-- Full-screen Catalog Search and Filters -->
+          <div class="catalog-full-filters">
+            <input type="text" id="full-catalog-search" class="search-input" placeholder="Search course titles or paths..." oninput="filterFullCatalog()">
+            <select id="full-catalog-filter-status" class="filter-select" onchange="filterFullCatalog()">
+              <option value="all">All Progress Statuses</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="notstarted">Not Started</option>
+            </select>
+          </div>
+          <div class="courses-grid" id="full-courses-grid">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </section>
+
+      <!-- ================== VIEW: COURSE WORKSPACE (PLAYER) ================== -->
+      <section id="view-workspace" class="content-view workspace-view">
+        <!-- Split view panel -->
+        <div class="workspace-layout">
+          
+          <!-- Collapsible Course Outline (Left) -->
+          <div class="workspace-sidebar" id="workspace-sidebar">
+            <div class="workspace-sidebar-header">
+              <button class="icon-btn close-workspace-btn" onclick="switchView('dashboard')" title="Back to Dashboard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              </button>
+              <div class="sidebar-course-info">
+                <h3 id="workspace-course-title">Loading Course...</h3>
+                <div class="course-meta-row">
+                  <span id="workspace-course-progress">0% Completed</span>
+                  <button class="reset-course-btn" id="btn-reset-course" onclick="confirmResetCourseProgress(event)" title="Reset all progress for this course">
+                    <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                    Reset
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div class="workspace-search-bar">
+              <input type="text" id="outline-search" class="search-input small" placeholder="Search lectures..." oninput="filterCourseOutline()">
+            </div>
+
+            <div class="outline-scroller" id="course-outline-list">
+              <!-- Dynamically populated accordion folders of files -->
+            </div>
+          </div>
+
+          <!-- Main Player / Document Viewer Panel (Right) -->
+          <div class="workspace-main" id="workspace-main-panel">
+            
+            <!-- Breadcrumbs Header -->
+            <header class="workspace-header">
+              <div class="breadcrumb">
+                <span id="crumb-course" class="crumb-link" onclick="switchView('dashboard')">Dashboard</span>
+                <span class="crumb-separator">/</span>
+                <span id="crumb-section">Section</span>
+                <span class="crumb-separator">/</span>
+                <span id="crumb-item" class="active">Lesson</span>
+              </div>
+              <div class="file-actions" id="file-actions-bar" style="display:none;">
+                <button class="action-btn-secondary" id="btn-reveal-finder" onclick="revealInFinder()" title="Reveal in Mac Finder">
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                  Reveal in Finder
+                </button>
+                <button class="action-btn-secondary" id="btn-open-system" onclick="openInSystem()" title="Open in System Default App">
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+                  Open in App
+                </button>
+                <button class="action-btn-primary" id="btn-toggle-complete" onclick="toggleCurrentItemComplete()" title="Toggle Completed Status">
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"/></svg>
+                  <span>Mark Complete</span>
+                </button>
+              </div>
+            </header>
+
+            <!-- Playback / Display Workspace Containers -->
+            <div class="viewer-container" id="viewer-container">
+              
+              <!-- Blank State -->
+              <div class="blank-state active" id="viewer-blank">
+                <svg class="blank-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+                <h3>Select a Lesson</h3>
+                <p>Choose a video, PDF document, HTML article, or text file from the left outline to start studying.</p>
+              </div>
+
+              <!-- Video Player Interface -->
+              <div class="viewer-player" id="viewer-video-container" style="display:none;">
+                <div class="video-wrapper">
+                  <video id="main-video-player" crossorigin="anonymous" playsinline>
+                    <!-- Video sources and tracks loaded dynamically -->
+                  </video>
+
+                  <!-- Autoplay Countdown Overlay -->
+                  <div class="autoplay-overlay" id="autoplay-overlay" style="display:none;">
+                    <div class="autoplay-content">
+                      <p>Up Next in <span id="autoplay-countdown">5</span> seconds</p>
+                      <h4 id="autoplay-next-title">Next Lesson Title</h4>
+                      <div class="autoplay-buttons">
+                        <button class="primary-btn" id="autoplay-play-now" onclick="triggerAutoplayNow()">Play Now</button>
+                        <button class="secondary-btn" id="autoplay-cancel" onclick="cancelAutoplay()">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Custom Video Controls (Overlaying or below the video) -->
+                <div class="custom-video-controls">
+                  <div class="control-row progress-row">
+                    <input type="range" id="video-progress-slider" min="0" max="100" value="0" class="progress-slider" oninput="onVideoSliderChange()">
+                    <div class="time-display">
+                      <span id="video-current-time">00:00</span>
+                      <span class="time-divider">/</span>
+                      <span id="video-total-duration">00:00</span>
+                    </div>
+                  </div>
+                  <div class="control-row buttons-row">
+                    <div class="controls-left">
+                      <button class="control-btn" id="video-prev-btn" onclick="playPreviousItem()" title="Previous Lesson">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+                      </button>
+                      <button class="control-btn" id="video-play-btn" onclick="togglePlay()" title="Play/Pause">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="play-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      </button>
+                      <button class="control-btn" id="video-next-btn" onclick="playNextItem()" title="Next Lesson">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                      </button>
+                      <div class="volume-container">
+                        <button class="control-btn" id="video-mute-btn" onclick="toggleMute()" title="Mute/Unmute">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="volume-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                        </button>
+                        <input type="range" id="video-volume-slider" min="0" max="1" step="0.05" value="1" class="volume-slider" oninput="onVolumeSliderChange()">
+                      </div>
+                    </div>
+                    <div class="controls-right">
+                      <div class="speed-container">
+                        <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
+                        <div class="speed-menu" id="speed-dropdown-menu">
+                          <button onclick="setPlaybackRate(0.5)">0.5x</button>
+                          <button onclick="setPlaybackRate(1.0)" class="active">1.0x (Normal)</button>
+                          <button onclick="setPlaybackRate(1.25)">1.25x</button>
+                          <button onclick="setPlaybackRate(1.5)">1.5x</button>
+                          <button onclick="setPlaybackRate(1.75)">1.75x</button>
+                          <button onclick="setPlaybackRate(2.0)">2.0x</button>
+                          <button onclick="setPlaybackRate(2.5)">2.5x</button>
+                          <button onclick="setPlaybackRate(3.0)">3.0x</button>
+                        </div>
+                      </div>
+                      <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- PDF Viewer Container -->
+              <div class="viewer-iframe" id="viewer-pdf-container" style="display:none;">
+                <iframe id="pdf-frame" src="" type="application/pdf"></iframe>
+              </div>
+
+              <!-- HTML Viewer Container -->
+              <div class="viewer-iframe" id="viewer-html-container" style="display:none;">
+                <iframe id="html-frame" src=""></iframe>
+              </div>
+
+              <!-- Markdown/Text Viewer Container -->
+              <div class="viewer-text" id="viewer-text-container" style="display:none;">
+                <div class="text-content-card">
+                  <pre id="text-pre-content">Loading content...</pre>
+                </div>
+              </div>
+
+              <!-- Unrecognized/General File Container -->
+              <div class="viewer-other" id="viewer-other-container" style="display:none;">
+                <div class="other-file-card">
+                  <svg class="file-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  <h3 id="other-file-name">file_name.zip</h3>
+                  <p>This file type (<span id="other-file-ext">.zip</span>) cannot be viewed directly inside the browser player.</p>
+                  <div class="other-file-buttons">
+                    <button class="primary-btn" onclick="openInSystem()">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+                      Open in Default Application
+                    </button>
+                    <button class="secondary-btn" onclick="revealInFinder()">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                      Reveal in Finder
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+          
+        </div>
+      </section>
+
+      <!-- ================== VIEW: SETTINGS ================== -->
+      <section id="view-settings" class="content-view">
+        <div class="view-header">
+          <div>
+            <h1>Settings</h1>
+            <p class="subtitle">Configure scan directories and application parameters.</p>
+          </div>
+        </div>
+
+        <div class="settings-content">
+          <!-- Folders Management Card -->
+          <div class="settings-card">
+            <h3>Course Folders to Watch</h3>
+            <p class="card-desc">The application scans these directories on your Mac to build your course catalog. The default folders point to your courses and downloads folder.</p>
+            
+            <div class="folder-list-container">
+              <table class="folder-table">
+                <thead>
+                  <tr>
+                    <th>Folder Path</th>
+                    <th style="width:100px; text-align:right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="watched-folders-table-body">
+                  <!-- Dynamically populated rows -->
+                </tbody>
+              </table>
+            </div>
+
+            <div class="add-folder-form">
+              <input type="text" id="new-folder-input" class="folder-path-input" placeholder="e.g. /Users/maulik/Downloads/my-new-courses">
+              <button class="primary-btn" onclick="addNewFolder()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add Folder
+              </button>
+            </div>
+            <p class="error-msg" id="add-folder-error"></p>
+          </div>
+
+          <!-- Utility Card -->
+          <div class="settings-card danger-card">
+            <h3>Progress & Database Utilities</h3>
+            <p class="card-desc">Resetting progress deletes all watched bookmarks, playback logs, and document completed checkboxes. This operation is irreversible.</p>
+            <div class="card-actions">
+              <button class="danger-btn" onclick="confirmResetProgress()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
+                Reset All Learning Progress
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Notification Banner -->
+  <div id="toast-notification" class="toast-toast">
+    <span id="toast-message">Progress saved successfully</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
