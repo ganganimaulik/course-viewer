@@ -1173,11 +1173,11 @@ async function saveVideoProgress(force = false, isCompleted = false) {
       });
       const data = await res.json();
       
-      // Update item progress model locally
-      state.currentItem.progress = data;
-      
       // Sync local courses progress values
       syncCourseProgressMap(state.currentItem.path, data);
+
+      // Update item progress model locally
+      state.currentItem.progress = data;
 
       // Update the header action button state
       updateHeaderActionBtn();
@@ -1209,10 +1209,12 @@ function syncCourseProgressMap(path, progressObj) {
     c.sections.forEach(sec => {
       sec.items.forEach(item => {
         if (item.path === path) {
-          const wasCompleted = item.progress && item.progress.completed;
+          const wasCompleted = !!(item.progress && item.progress.completed);
+          const isCompletedNow = !!(progressObj && progressObj.completed);
+          
           item.progress = progressObj;
           
-          if (wasCompleted !== progressObj.completed) {
+          if (wasCompleted !== isCompletedNow) {
             finishedCountChanged = true;
           }
         }
@@ -1296,8 +1298,8 @@ async function saveItemStarted(item) {
       })
     });
     const progressObj = await res.json();
-    item.progress = progressObj;
     syncCourseProgressMap(item.path, progressObj);
+    item.progress = progressObj;
     renderActiveWorkspaceOutline();
   } catch (e) {
     console.error(e);
@@ -1360,8 +1362,8 @@ async function saveCompletedState(item, completed) {
     });
     const progressObj = await res.json();
     
-    item.progress = progressObj;
     syncCourseProgressMap(item.path, progressObj);
+    item.progress = progressObj;
     
     renderActiveWorkspaceOutline();
     showToast(completed ? 'Lesson marked as completed!' : 'Lesson marked in-progress');
