@@ -1,3 +1,6 @@
+// --- API CONFIGURATION ---
+const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3005' : '';
+
 // --- APPLICATION STATE ---
 let state = {
   courses: [],
@@ -100,11 +103,11 @@ async function refreshCatalog() {
   
   try {
     // Fetch watch folders config
-    const configRes = await fetch('/api/config');
+    const configRes = await fetch(`${API_BASE}/api/config`);
     state.config = await configRes.json();
     
     // Fetch courses with merged progress
-    const coursesRes = await fetch('/api/courses');
+    const coursesRes = await fetch(`${API_BASE}/api/courses`);
     state.courses = await coursesRes.json();
 
     renderDashboard();
@@ -323,7 +326,7 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
         <div class="badge-and-reset">
           <span class="course-source-badge" title="${c.sourceRoot}">${folderBadge}</span>
           ${(c.completedItems > 0 || c.hasProgress) ? `
-            <button class="card-reset-btn" onclick="confirmResetCourseProgressCard(event, '${c.id}', '${c.title.replace(/'/g, "\\'")}')" title="Reset Course Progress">
+            <button class="card-reset-btn" onclick="confirmResetCourseProgressCard(event, '${c.id}', '${c.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Reset Course Progress">
               <svg class="card-reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           ` : ''}
@@ -571,11 +574,11 @@ function selectItem(item, section = null) {
     loadVideoPlayer(item);
   } else if (item.type === 'pdf') {
     const iframe = document.getElementById('pdf-frame');
-    iframe.src = `/api/file?path=${encodeURIComponent(item.path)}`;
+    iframe.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
     saveItemStarted(item);
   } else if (item.type === 'html') {
     const iframe = document.getElementById('html-frame');
-    iframe.src = `/api/file?path=${encodeURIComponent(item.path)}`;
+    iframe.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
     saveItemStarted(item);
   } else if (item.type === 'text') {
     loadTextViewer(item);
@@ -662,13 +665,13 @@ function loadVideoPlayer(item) {
   
   // Set video source
   const source = document.createElement('source');
-  source.src = `/api/video?path=${encodeURIComponent(item.path)}`;
+  source.src = `${API_BASE}/api/video?path=${encodeURIComponent(item.path)}`;
   video.appendChild(source);
 
   // If subtitle track is present
   if (item.subtitlePath) {
     const track = document.createElement('track');
-    track.src = `/api/subtitle?path=${encodeURIComponent(item.subtitlePath)}`;
+    track.src = `${API_BASE}/api/subtitle?path=${encodeURIComponent(item.subtitlePath)}`;
     track.kind = 'captions';
     track.srclang = 'en';
     track.label = 'English';
@@ -760,7 +763,7 @@ async function saveVideoProgress(force = false, isCompleted = false) {
     state.lastSavedTime = now;
     
     try {
-      const res = await fetch('/api/progress', {
+      const res = await fetch(`${API_BASE}/api/progress`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -866,7 +869,7 @@ async function loadTextViewer(item) {
   textPre.textContent = 'Loading text document...';
 
   try {
-    const res = await fetch(`/api/file?path=${encodeURIComponent(item.path)}`);
+    const res = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`);
     const txt = await res.text();
     textPre.textContent = txt;
     saveItemStarted(item);
@@ -881,7 +884,7 @@ async function saveItemStarted(item) {
   if (item.progress) return; // already has progress log
   
   try {
-    const res = await fetch('/api/progress', {
+    const res = await fetch(`${API_BASE}/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -956,7 +959,7 @@ async function saveCompletedState(item, completed) {
       }
     }
 
-    const res = await fetch('/api/progress', {
+    const res = await fetch(`${API_BASE}/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -1059,7 +1062,7 @@ function triggerAutoplayNow() {
 async function revealInFinder() {
   if (!state.currentItem) return;
   try {
-    const res = await fetch('/api/open-in-finder', {
+    const res = await fetch(`${API_BASE}/api/open-in-finder`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: state.currentItem.path })
@@ -1075,7 +1078,7 @@ async function revealInFinder() {
 async function openInSystem() {
   if (!state.currentItem) return;
   try {
-    const res = await fetch('/api/open-in-system', {
+    const res = await fetch(`${API_BASE}/api/open-in-system`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: state.currentItem.path })
@@ -1119,7 +1122,7 @@ async function addNewFolder() {
   }
 
   try {
-    const res = await fetch('/api/config', {
+    const res = await fetch(`${API_BASE}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: folderPath })
@@ -1144,7 +1147,7 @@ async function addNewFolder() {
 
 async function removeFolder(folderPath) {
   try {
-    const res = await fetch('/api/config/remove', {
+    const res = await fetch(`${API_BASE}/api/config/remove`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: folderPath })
@@ -1167,7 +1170,7 @@ async function confirmResetProgress() {
   if (!ans) return;
 
   try {
-    const res = await fetch('/api/progress/reset', { method: 'POST' });
+    const res = await fetch(`${API_BASE}/api/progress/reset`, { method: 'POST' });
     if (res.ok) {
       showToast('All progress reset successfully');
       await refreshCatalog();
@@ -1185,7 +1188,7 @@ async function confirmResetCourseProgress(event) {
   if (!ans) return;
 
   try {
-    const res = await fetch('/api/courses/reset', {
+    const res = await fetch(`${API_BASE}/api/courses/reset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ courseId: state.currentCourse.id })
@@ -1207,7 +1210,7 @@ async function confirmResetCourseProgressCard(event, courseId, courseTitle) {
   if (!ans) return;
 
   try {
-    const res = await fetch('/api/courses/reset', {
+    const res = await fetch(`${API_BASE}/api/courses/reset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ courseId: courseId })
