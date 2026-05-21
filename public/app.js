@@ -679,6 +679,20 @@ function filterCourseOutline() {
   renderActiveWorkspaceOutline();
 }
 
+// Update the header action button state based on the current active item progress
+function updateHeaderActionBtn() {
+  const actionBtn = document.getElementById('btn-toggle-complete');
+  if (!actionBtn || !state.currentItem) return;
+  const isCompleted = state.currentItem.progress && state.currentItem.progress.completed;
+  if (isCompleted) {
+    actionBtn.classList.add('completed');
+    actionBtn.querySelector('span').textContent = 'Completed';
+  } else {
+    actionBtn.classList.remove('completed');
+    actionBtn.querySelector('span').textContent = 'Mark Complete';
+  }
+}
+
 // Select item to load in viewer panel
 function selectItem(item, section = null) {
   // Clear any active playback timer loops
@@ -713,14 +727,7 @@ function selectItem(item, section = null) {
   document.getElementById('crumb-item').classList.add('active');
 
   // Enable/Show top actions bar
-  const actionBtn = document.getElementById('btn-toggle-complete');
-  if (item.progress && item.progress.completed) {
-    actionBtn.classList.add('completed');
-    actionBtn.querySelector('span').textContent = 'Completed';
-  } else {
-    actionBtn.classList.remove('completed');
-    actionBtn.querySelector('span').textContent = 'Mark Complete';
-  }
+  updateHeaderActionBtn();
   document.getElementById('file-actions-bar').style.display = 'flex';
 
   // Toggle based on file type
@@ -951,6 +958,9 @@ async function saveVideoProgress(force = false, isCompleted = false) {
       
       // Sync local courses progress values
       syncCourseProgressMap(state.currentItem.path, data);
+
+      // Update the header action button state
+      updateHeaderActionBtn();
     } catch (err) {
       console.error('Error saving progress:', err);
     }
@@ -993,6 +1003,8 @@ function syncCourseProgressMap(path, progressObj) {
   if (finishedCountChanged) {
     // Recompute total completed files / course percentages
     recomputeTotalProgress();
+    // Re-render active workspace outline to update checkboxes
+    renderActiveWorkspaceOutline();
   }
 }
 
@@ -1097,16 +1109,7 @@ async function toggleCurrentItemComplete() {
   if (!state.currentItem) return;
   const isNowCompleted = !(state.currentItem.progress && state.currentItem.progress.completed);
   await saveCompletedState(state.currentItem, isNowCompleted);
-  
-  // Update header action button status
-  const actionBtn = document.getElementById('btn-toggle-complete');
-  if (isNowCompleted) {
-    actionBtn.classList.add('completed');
-    actionBtn.querySelector('span').textContent = 'Completed';
-  } else {
-    actionBtn.classList.remove('completed');
-    actionBtn.querySelector('span').textContent = 'Mark Complete';
-  }
+  updateHeaderActionBtn();
 }
 
 async function saveCompletedState(item, completed) {
