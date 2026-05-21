@@ -165,8 +165,24 @@
               <input type="text" id="outline-search" class="search-input small" placeholder="Search lectures..." oninput="filterCourseOutline()">
             </div>
 
+            <!-- Workspace Sidebar Tabs -->
+            <div class="workspace-tabs">
+              <button class="workspace-tab active" id="tab-lessons" onclick="switchWorkspaceTab('lessons')">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5L4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/></svg>
+                Lessons
+              </button>
+              <button class="workspace-tab" id="tab-resources" onclick="switchWorkspaceTab('resources')">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r=".5" fill="currentColor"/></svg>
+                Resources
+              </button>
+            </div>
+
             <div class="outline-scroller" id="course-outline-list">
               <!-- Dynamically populated accordion folders of files -->
+            </div>
+
+            <div class="outline-scroller" id="course-resources-list" style="display:none;">
+              <!-- Dynamically populated accordion folders of resource files -->
             </div>
           </div>
 
@@ -292,6 +308,13 @@
               <div class="viewer-text" id="viewer-text-container" style="display:none;">
                 <div class="text-content-card">
                   <pre id="text-pre-content">Loading content...</pre>
+                </div>
+              </div>
+
+              <!-- Image Viewer Container -->
+              <div class="viewer-image" id="viewer-image-container" style="display:none;">
+                <div class="image-content-card">
+                  <img id="image-view-element" src="" alt="Course Resource Image" />
                 </div>
               </div>
 

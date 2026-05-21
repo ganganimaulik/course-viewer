@@ -8,6 +8,10 @@ const app = express();
 const PORT = 3005;
 const DB_FILE = path.join(__dirname, 'db.json');
 
+const IGNORE_DIRS = ['node_modules', 'dist', 'build', '.git', 'venv', '.env', 'env', 'bower_components'];
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif'];
+const CODE_EXTENSIONS = ['.js', '.py', '.sh', '.json', '.css', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.yaml', '.yml', '.xml', '.sql', '.ini', '.conf'];
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -80,6 +84,9 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
         const fullPath = path.join(currentPath, item.name);
 
         if (item.isDirectory()) {
+          if (IGNORE_DIRS.includes(item.name.toLowerCase())) {
+            continue; // Skip ignored directories
+          }
           const newSectionName = currentSectionName === 'General' ? item.name : `${currentSectionName} / ${item.name}`;
           traverse(fullPath, newSectionName);
         } else if (item.isFile()) {
@@ -94,7 +101,11 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
             type = 'html';
           } else if (['.txt', '.md'].includes(ext)) {
             type = 'text';
-          } else if (['.vtt', '.srt', '.png', '.jpg', '.jpeg', '.gif', '.DS_Store'].includes(ext)) {
+          } else if (IMAGE_EXTENSIONS.includes(ext)) {
+            type = 'image';
+          } else if (CODE_EXTENSIONS.includes(ext)) {
+            type = 'code';
+          } else if (['.vtt', '.srt', '.DS_Store'].includes(ext)) {
             continue; // Skip files that are not main learning materials
           } else {
             type = 'other'; // docs, zips, etc.
@@ -458,7 +469,7 @@ app.get('/api/subtitle', (req, res) => {
   }
 });
 
-// Serves PDF, HTML, or plain text
+// Serves PDF, HTML, images, code, or plain text
 app.get('/api/file', (req, res) => {
   const filePath = req.query.path;
   if (!filePath) {
@@ -470,10 +481,22 @@ app.get('/api/file', (req, res) => {
 
   const ext = path.extname(filePath).toLowerCase();
   let contentType = 'application/octet-stream';
-  if (ext === '.pdf') contentType = 'application/pdf';
-  else if (ext === '.html' || ext === '.htm') contentType = 'text/html';
-  else if (ext === '.txt') contentType = 'text/plain';
-  else if (ext === '.md') contentType = 'text/markdown';
+
+  const textExtensions = ['.txt', '.md', ...CODE_EXTENSIONS];
+
+  if (ext === '.pdf') {
+    contentType = 'application/pdf';
+  } else if (ext === '.html' || ext === '.htm') {
+    contentType = 'text/html';
+  } else if (textExtensions.includes(ext)) {
+    contentType = 'text/plain';
+  } else if (ext === '.png') {
+    contentType = 'image/png';
+  } else if (['.jpg', '.jpeg'].includes(ext)) {
+    contentType = 'image/jpeg';
+  } else if (ext === '.gif') {
+    contentType = 'image/gif';
+  }
 
   res.setHeader('Content-Type', contentType);
   fs.createReadStream(filePath).pipe(res);

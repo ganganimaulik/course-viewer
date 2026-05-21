@@ -12,7 +12,8 @@ let state = {
   playbackRate: 1.0,
   progressSaveInterval: null,
   lastSavedTime: 0,
-  autoplayTimer: null
+  autoplayTimer: null,
+  currentWorkspaceTab: 'lessons'
 };
 
 // Toast notification function
@@ -120,7 +121,7 @@ async function refreshCatalog() {
       if (updatedCourse) {
         state.currentCourse = updatedCourse;
         document.getElementById('workspace-course-progress').textContent = `${updatedCourse.progressPercent}% Completed`;
-        renderCourseOutline();
+        renderActiveWorkspaceOutline();
       }
     }
   } catch (err) {
@@ -414,7 +415,25 @@ function openCourse(courseId) {
   document.getElementById('workspace-course-title').textContent = course.title;
   document.getElementById('workspace-course-progress').textContent = `${course.progressPercent}% Completed`;
   
-  renderCourseOutline();
+  // Reset tab to lessons
+  state.currentWorkspaceTab = 'lessons';
+  const tabLessons = document.getElementById('tab-lessons');
+  const tabResources = document.getElementById('tab-resources');
+  if (tabLessons) tabLessons.classList.add('active');
+  if (tabResources) tabResources.classList.remove('active');
+  
+  const listLessons = document.getElementById('course-outline-list');
+  const listResources = document.getElementById('course-resources-list');
+  if (listLessons) listLessons.style.display = 'block';
+  if (listResources) listResources.style.display = 'none';
+
+  const searchInput = document.getElementById('outline-search');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.placeholder = 'Search lectures...';
+  }
+
+  renderActiveWorkspaceOutline();
 
   // Load blank state viewer
   showViewerPanel('blank');
@@ -427,16 +446,22 @@ function openCourse(courseId) {
   document.getElementById('crumb-item').classList.remove('active');
 }
 
-// Renders Accordion Directory outline
+// Renders Accordion Directory outline for Lessons (videos, pdf, html, text)
 function renderCourseOutline() {
   const outlineList = document.getElementById('course-outline-list');
+  if (!outlineList) return;
   outlineList.innerHTML = '';
 
   const searchQuery = document.getElementById('outline-search').value.toLowerCase().trim();
 
   state.currentCourse.sections.forEach(section => {
-    let itemsFiltered = section.items.filter(item => item.name.toLowerCase().includes(searchQuery));
-    if (searchQuery !== '' && itemsFiltered.length === 0) return; // Hide section if search query exists and no items match
+    let itemsFiltered = section.items.filter(item => {
+      const isCore = ['video', 'pdf', 'html', 'text'].includes(item.type);
+      const matchesSearch = item.name.toLowerCase().includes(searchQuery);
+      return isCore && matchesSearch;
+    });
+
+    if (itemsFiltered.length === 0) return; // Hide section if no items match
 
     const acc = document.createElement('div');
     acc.className = 'section-accordion';
@@ -519,8 +544,139 @@ function renderCourseOutline() {
   });
 }
 
+// Renders Accordion Directory outline for Resources (images, code, other files)
+function renderCourseResources() {
+  const resourceList = document.getElementById('course-resources-list');
+  if (!resourceList) return;
+  resourceList.innerHTML = '';
+
+  const searchQuery = document.getElementById('outline-search').value.toLowerCase().trim();
+
+  state.currentCourse.sections.forEach(section => {
+    let itemsFiltered = section.items.filter(item => {
+      const isResource = ['image', 'code', 'other'].includes(item.type);
+      const matchesSearch = item.name.toLowerCase().includes(searchQuery);
+      return isResource && matchesSearch;
+    });
+
+    if (itemsFiltered.length === 0) return; // Hide section if no items match
+
+    const acc = document.createElement('div');
+    acc.className = 'section-accordion';
+    acc.id = `sec-res-acc-${section.name.replace(/\s+/g, '_')}`;
+
+    // Header Trigger
+    const trigger = document.createElement('button');
+    trigger.className = 'section-trigger';
+    trigger.onclick = () => acc.classList.toggle('collapsed');
+
+    // Folder Icon Mapping
+    let sectionIconSVG = `
+      <svg class="section-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    `;
+    if (section.name === 'General') {
+      sectionIconSVG = `
+        <svg class="section-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+      `;
+    }
+
+    trigger.innerHTML = `
+      <div class="section-title-wrapper">
+        ${sectionIconSVG}
+        <span class="section-title-text" title="${section.name}">${section.name}</span>
+      </div>
+      <svg class="section-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    `;
+    acc.appendChild(trigger);
+
+    // Section Content
+    const content = document.createElement('div');
+    content.className = 'section-content';
+
+    itemsFiltered.forEach(item => {
+      const itemRow = document.createElement('div');
+      itemRow.className = 'outline-item';
+      if (state.currentItem && state.currentItem.path === item.path) {
+        itemRow.classList.add('active');
+      }
+      itemRow.id = `item-row-${item.name.replace(/\s+/g, '_')}`;
+      
+      // Determine file icon
+      let typeIcon = '';
+      if (item.type === 'image') {
+        typeIcon = '<svg class="outline-item-icon image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+      } else if (item.type === 'code') {
+        typeIcon = '<svg class="outline-item-icon code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+      } else {
+        typeIcon = '<svg class="outline-item-icon other" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+      }
+
+      // Checkbox checked state
+      const isCompleted = item.progress && item.progress.completed;
+      const checkedClass = isCompleted ? 'checked' : '';
+
+      itemRow.innerHTML = `
+        <div class="item-check-checkbox ${checkedClass}" onclick="toggleItemComplete(event, '${item.path}')">
+          <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        ${typeIcon}
+        <span class="outline-item-name" title="${item.name}">${item.name}</span>
+      `;
+
+      // Entire row click selects the item to view
+      itemRow.addEventListener('click', (e) => {
+        if (!e.target.closest('.item-check-checkbox')) {
+          selectItem(item, section);
+        }
+      });
+
+      content.appendChild(itemRow);
+    });
+
+    acc.appendChild(content);
+    resourceList.appendChild(acc);
+  });
+}
+
+function switchWorkspaceTab(tabName) {
+  if (tabName !== 'lessons' && tabName !== 'resources') return;
+  state.currentWorkspaceTab = tabName;
+
+  const tabLessons = document.getElementById('tab-lessons');
+  const tabResources = document.getElementById('tab-resources');
+  const listLessons = document.getElementById('course-outline-list');
+  const listResources = document.getElementById('course-resources-list');
+  const searchInput = document.getElementById('outline-search');
+
+  if (searchInput) searchInput.value = '';
+
+  if (tabName === 'lessons') {
+    if (tabLessons) tabLessons.classList.add('active');
+    if (tabResources) tabResources.classList.remove('active');
+    if (listLessons) listLessons.style.display = 'block';
+    if (listResources) listResources.style.display = 'none';
+    if (searchInput) searchInput.placeholder = 'Search lectures...';
+  } else {
+    if (tabLessons) tabLessons.classList.remove('active');
+    if (tabResources) tabResources.classList.add('active');
+    if (listLessons) listLessons.style.display = 'none';
+    if (listResources) listResources.style.display = 'block';
+    if (searchInput) searchInput.placeholder = 'Search resources...';
+  }
+
+  renderActiveWorkspaceOutline();
+}
+
+function renderActiveWorkspaceOutline() {
+  if (state.currentWorkspaceTab === 'lessons') {
+    renderCourseOutline();
+  } else {
+    renderCourseResources();
+  }
+}
+
 function filterCourseOutline() {
-  renderCourseOutline();
+  renderActiveWorkspaceOutline();
 }
 
 // Select item to load in viewer panel
@@ -582,6 +738,12 @@ function selectItem(item, section = null) {
     saveItemStarted(item);
   } else if (item.type === 'text') {
     loadTextViewer(item);
+  } else if (item.type === 'image') {
+    const imgElement = document.getElementById('image-view-element');
+    imgElement.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
+    saveItemStarted(item);
+  } else if (item.type === 'code') {
+    loadTextViewer(item);
   } else {
     document.getElementById('other-file-name').textContent = item.name;
     document.getElementById('other-file-ext').textContent = item.extension;
@@ -596,17 +758,22 @@ function showViewerPanel(type) {
     pdf: 'viewer-pdf-container',
     html: 'viewer-html-container',
     text: 'viewer-text-container',
+    image: 'viewer-image-container',
+    code: 'viewer-text-container',
     other: 'viewer-other-container'
   };
 
   Object.keys(panels).forEach(key => {
     const el = document.getElementById(panels[key]);
-    if (key === type) {
-      el.style.display = key === 'blank' ? 'flex' : 'block';
-      if (key === 'blank') el.classList.add('active');
+    if (!el) return;
+    if (panels[key] === panels[type]) {
+      el.style.display = panels[key] === 'viewer-blank' ? 'flex' : 'block';
+      if (panels[key] === 'viewer-blank') el.classList.add('active');
     } else {
-      el.style.display = 'none';
-      if (key === 'blank') el.classList.remove('active');
+      if (panels[key] !== panels[type]) {
+        el.style.display = 'none';
+        if (panels[key] === 'viewer-blank') el.classList.remove('active');
+      }
     }
   });
 }
@@ -895,7 +1062,7 @@ async function saveItemStarted(item) {
     const progressObj = await res.json();
     item.progress = progressObj;
     syncCourseProgressMap(item.path, progressObj);
-    renderCourseOutline();
+    renderActiveWorkspaceOutline();
   } catch (e) {
     console.error(e);
   }
@@ -969,7 +1136,7 @@ async function saveCompletedState(item, completed) {
     item.progress = progressObj;
     syncCourseProgressMap(item.path, progressObj);
     
-    renderCourseOutline();
+    renderActiveWorkspaceOutline();
     showToast(completed ? 'Lesson marked as completed!' : 'Lesson marked in-progress');
   } catch (err) {
     console.error(err);
@@ -980,9 +1147,17 @@ async function saveCompletedState(item, completed) {
 // --- WORKSPACE NAV: PREV / NEXT ---
 function getFlatItemsList() {
   const list = [];
+  if (!state.currentCourse || !state.currentCourse.sections) return list;
+  const activeTab = state.currentWorkspaceTab || 'lessons';
+  const allowedTypes = activeTab === 'lessons'
+    ? ['video', 'pdf', 'html', 'text']
+    : ['image', 'code', 'other'];
+
   state.currentCourse.sections.forEach(sec => {
     sec.items.forEach(item => {
-      list.push(item);
+      if (allowedTypes.includes(item.type)) {
+        list.push(item);
+      }
     });
   });
   return list;
