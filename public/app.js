@@ -1323,15 +1323,23 @@ async function toggleItemComplete(event, path) {
   if (!matchedItem) return;
 
   const isNowCompleted = !(matchedItem.progress && matchedItem.progress.completed);
-  await saveCompletedState(matchedItem, isNowCompleted);
+  const success = await saveCompletedState(matchedItem, isNowCompleted);
+
+  // If completed and it is the current item, auto-advance to next item
+  if (success && isNowCompleted && state.currentItem && matchedItem.path === state.currentItem.path) {
+    playNextItem();
+  }
 }
 
 // Toggle current loaded item complete
 async function toggleCurrentItemComplete() {
   if (!state.currentItem) return;
   const isNowCompleted = !(state.currentItem.progress && state.currentItem.progress.completed);
-  await saveCompletedState(state.currentItem, isNowCompleted);
+  const success = await saveCompletedState(state.currentItem, isNowCompleted);
   updateHeaderActionBtn();
+  if (success && isNowCompleted) {
+    playNextItem();
+  }
 }
 
 async function saveCompletedState(item, completed) {
@@ -1367,9 +1375,11 @@ async function saveCompletedState(item, completed) {
     
     renderActiveWorkspaceOutline();
     showToast(completed ? 'Lesson marked as completed!' : 'Lesson marked in-progress');
+    return true;
   } catch (err) {
     console.error(err);
     showToast('Failed to save completion state');
+    return false;
   }
 }
 
