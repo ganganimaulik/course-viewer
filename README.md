@@ -49,3 +49,54 @@ A local web application designed to help you organize, play, and track learning 
 ### Watching Folders
 - By default, the application watches `~/Downloads/courses` and `~/Downloads/Mega Downloads`.
 - Navigate to the **Settings** view in the UI to add any custom local directories to scan.
+
+---
+
+## Autostart with PM2 (Background Service)
+
+To run the application continuously in the background and ensure it automatically starts when your Mac boots:
+
+### 1. Install PM2 globally
+```bash
+npm install -g pm2
+```
+
+### 2. Start the Application
+From the repository root directory, start the server:
+```bash
+pm2 start server.js --name "course-viewer"
+```
+
+### 3. Configure PM2 Startup
+To configure PM2 to run automatically when the system boots:
+```bash
+pm2 startup
+```
+This command will output a specific `sudo` command. Copy and run that command in your terminal to enable the boot configuration.
+
+### 4. Save the Process List
+Save the active process list so it is restored on boot:
+```bash
+pm2 save
+```
+
+### 5. Managing the Service
+- **Check Status:** `pm2 status`
+- **View Logs:** `pm2 logs course-viewer`
+- **Restart Application:** `pm2 restart course-viewer`
+- **Temporarily Stop Application:** `pm2 stop course-viewer`
+- **Start/Re-enable Application:** `pm2 start course-viewer`
+
+### 6. Disable PM2 Autostart Completely
+If you want to remove the application from PM2 and disable autostart on system boot:
+1. Remove the application from the PM2 registry and save the empty list:
+   ```bash
+   pm2 delete course-viewer
+   pm2 save
+   ```
+2. Disable the PM2 boot hook:
+   ```bash
+   pm2 unstartup
+   ```
+   *(This command will output a specific `sudo` command. Copy and run that command in your terminal to completely remove the startup agent from macOS)*.
+

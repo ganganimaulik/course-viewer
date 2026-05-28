@@ -993,6 +993,22 @@ h1 {
   display: block;
 }
 
+.item-check-checkbox.skipped {
+  background: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.skip-svg {
+  width: 10px;
+  height: 10px;
+  color: #fff;
+  display: none;
+}
+
+.item-check-checkbox.skipped .skip-svg {
+  display: block;
+}
+
 .outline-item-icon {
   width: 16px;
   height: 16px;
@@ -1120,6 +1136,17 @@ h1 {
   background: var(--color-success);
   border-color: var(--color-success);
   color: #fff;
+}
+
+.action-btn-secondary.skipped {
+  background: var(--color-warning);
+  border-color: var(--color-warning);
+  color: #fff;
+}
+
+.action-btn-secondary.skipped:hover {
+  background: #d97706; /* slightly darker warning hover color */
+  border-color: #d97706;
 }
 
 .action-icon {
@@ -1761,7 +1788,7 @@ h1 {
   color: var(--text-main);
 }
 
-/* Course Progress Reset Button and Layout Styles */
+/* Course Progress Reset/Watch Button and Layout Styles */
 .course-meta-row {
   display: flex;
   align-items: center;
@@ -1793,11 +1820,41 @@ h1 {
   height: 11px;
 }
 
+.watch-course-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-success);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.watch-course-btn:hover {
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.watch-icon {
+  width: 11px;
+  height: 11px;
+}
+
 .badge-and-reset {
   display: flex;
   flex-direction: column;
   gap: 8px;
   align-items: flex-start;
+}
+
+.card-actions-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .card-reset-btn {
@@ -1820,6 +1877,30 @@ h1 {
 }
 
 .card-reset-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.card-watch-btn {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: var(--color-success);
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.card-watch-btn:hover {
+  background: var(--color-success);
+  color: #fff;
+  border-color: var(--color-success);
+}
+
+.card-watch-icon {
   width: 12px;
   height: 12px;
 }

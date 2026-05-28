@@ -267,7 +267,7 @@ app.get('/api/courses', (req, res) => {
         const prog = db.progress[item.path];
         if (prog) {
           item.progress = prog;
-          if (prog.completed) {
+          if (prog.completed || prog.skipped) {
             completedItems++;
           }
           if (prog.lastStudied) {
@@ -309,7 +309,7 @@ app.get('/api/progress', (req, res) => {
 
 // Save progress for an item
 app.post('/api/progress', (req, res) => {
-  const { filePath, currentTime, duration, completed } = req.body;
+  const { filePath, currentTime, duration, completed, skipped } = req.body;
   if (!filePath) {
     return res.status(400).send({ error: 'filePath is required' });
   }
@@ -323,17 +323,39 @@ app.post('/api/progress', (req, res) => {
 
   if (currentTime !== undefined) prog.currentTime = currentTime;
   if (duration !== undefined) prog.duration = duration;
-  if (completed !== undefined) {
-    prog.completed = completed;
-    if (completed) {
+
+  if (skipped !== undefined) {
+    prog.skipped = skipped;
+    if (skipped) {
+      prog.completed = false;
       prog.percent = 100;
-      if (prog.duration && prog.currentTime === undefined) {
-        prog.currentTime = prog.duration;
+    } else {
+      if (prog.duration && prog.currentTime !== undefined) {
+        prog.percent = Math.min(100, Math.round((prog.currentTime / prog.duration) * 100));
+      } else {
+        prog.percent = 0;
       }
     }
   }
 
-  if (prog.duration && prog.currentTime !== undefined) {
+  if (completed !== undefined) {
+    prog.completed = completed;
+    if (completed) {
+      prog.skipped = false;
+      prog.percent = 100;
+      if (prog.duration && prog.currentTime === undefined) {
+        prog.currentTime = prog.duration;
+      }
+    } else {
+      if (prog.duration && prog.currentTime !== undefined) {
+        prog.percent = Math.min(100, Math.round((prog.currentTime / prog.duration) * 100));
+      } else {
+        prog.percent = 0;
+      }
+    }
+  }
+
+  if (!prog.skipped && prog.duration && prog.currentTime !== undefined) {
     prog.percent = Math.min(100, Math.round((prog.currentTime / prog.duration) * 100));
     if (prog.percent >= 95) {
       prog.completed = true;
@@ -381,6 +403,54 @@ app.post('/api/courses/reset', (req, res) => {
 
   saveDb();
   res.send({ success: true, removedCount: count });
+});
+
+// Mark all progress as completed for a specific course
+app.post('/api/courses/complete', (req, res) => {
+  const { courseId } = req.body;
+  if (!courseId) {
+    return res.status(400).send({ error: 'courseId is required' });
+  }
+
+  // Decode courseId to get the course path
+  let coursePath;
+  try {
+    coursePath = Buffer.from(courseId, 'base64url').toString('utf8');
+  } catch (err) {
+    return res.status(400).send({ error: 'Invalid courseId' });
+  }
+
+  // Find all scanned courses and matching course
+  const courses = scanAllCourses();
+  const course = courses.find(c => c.id === courseId);
+  if (!course) {
+    return res.status(404).send({ error: 'Course not found' });
+  }
+
+  let count = 0;
+  const now = new Date().toISOString();
+  for (const section of course.sections) {
+    for (const item of section.items) {
+      const filePath = item.path;
+      if (!db.progress[filePath]) {
+        db.progress[filePath] = {};
+      }
+      const prog = db.progress[filePath];
+      prog.lastStudied = now;
+      prog.completed = true;
+      prog.skipped = false;
+      prog.percent = 100;
+      if (item.type === 'video') {
+        if (prog.duration) {
+          prog.currentTime = prog.duration;
+        }
+      }
+      count++;
+    }
+  }
+
+  saveDb();
+  res.send({ success: true, completedCount: count });
 });
 
 

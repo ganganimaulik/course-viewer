@@ -13,7 +13,8 @@ let state = {
   progressSaveInterval: null,
   lastSavedTime: 0,
   autoplayTimer: null,
-  currentWorkspaceTab: 'lessons'
+  currentWorkspaceTab: 'lessons',
+  sidebarAutoCollapsed: false
 };
 
 // Toast notification function
@@ -162,6 +163,10 @@ async function refreshCatalog(isInitialLoad = false) {
       if (updatedCourse) {
         state.currentCourse = updatedCourse;
         document.getElementById('workspace-course-progress').textContent = `${updatedCourse.progressPercent}% Completed`;
+        const watchBtn = document.getElementById('btn-watch-course');
+        if (watchBtn) {
+          watchBtn.style.display = updatedCourse.progressPercent === 100 ? 'none' : '';
+        }
         renderActiveWorkspaceOutline();
       }
     }
@@ -205,7 +210,7 @@ function renderDashboard() {
           if (item.type === 'video' && item.progress.currentTime) {
             totalWatchedSeconds += item.progress.currentTime;
           }
-          if (item.progress.completed) {
+          if (item.progress.completed || item.progress.skipped) {
             completedCount++;
           }
           recentFiles.push({
@@ -246,9 +251,14 @@ function renderDashboard() {
       card.onclick = () => resumePlayback(item);
 
       const percent = item.progress.percent || 0;
-      const progressLabel = item.type === 'video' 
-        ? `${formatTime(item.progress.currentTime)} / ${formatTime(item.progress.duration)} (${percent}%)`
-        : (item.progress.completed ? 'Completed' : 'Started');
+      let progressLabel = '';
+      if (item.progress.skipped) {
+        progressLabel = 'Skipped';
+      } else if (item.type === 'video') {
+        progressLabel = `${formatTime(item.progress.currentTime)} / ${formatTime(item.progress.duration)} (${percent}%)`;
+      } else {
+        progressLabel = item.progress.completed ? 'Completed' : 'Started';
+      }
 
       const dateStudied = getRelativeTime(new Date(item.progress.lastStudied));
 
@@ -371,11 +381,18 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
       <div class="course-card-top">
         <div class="badge-and-reset">
           <span class="course-source-badge" title="${c.sourceRoot}">${folderBadge}</span>
-          ${(c.completedItems > 0 || c.hasProgress) ? `
-            <button class="card-reset-btn" onclick="confirmResetCourseProgressCard(event, '${c.id}', '${c.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Reset Course Progress">
-              <svg class="card-reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-            </button>
-          ` : ''}
+          <div class="card-actions-row">
+            ${(c.completedItems > 0 || c.hasProgress) ? `
+              <button class="card-reset-btn" onclick="confirmResetCourseProgressCard(event, '${c.id}', '${c.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Reset Course Progress">
+                <svg class="card-reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              </button>
+            ` : ''}
+            ${c.completedItems < c.totalItems ? `
+              <button class="card-watch-btn" onclick="confirmWatchCourseProgressCard(event, '${c.id}', '${c.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Mark Course as Watched">
+                <svg class="card-watch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"/></svg>
+              </button>
+            ` : ''}
+          </div>
         </div>
         <div class="course-progress-ring">
           <svg>
@@ -463,6 +480,11 @@ function openCourse(courseId, restoreItemPath = null) {
 
   document.getElementById('workspace-course-title').textContent = course.title;
   document.getElementById('workspace-course-progress').textContent = `${course.progressPercent}% Completed`;
+  
+  const watchBtn = document.getElementById('btn-watch-course');
+  if (watchBtn) {
+    watchBtn.style.display = course.progressPercent === 100 ? 'none' : '';
+  }
   
   // Restore tab
   const storedTab = localStorage.getItem('current-workspace-tab') || 'lessons';
@@ -594,13 +616,17 @@ function renderCourseOutline() {
         typeIcon = '<svg class="outline-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
       }
 
-      // Checkbox checked state
-      const isCompleted = item.progress && item.progress.completed;
-      const checkedClass = isCompleted ? 'checked' : '';
+      // Checkbox checked/skipped state
+      let checkedClass = '';
+      if (item.progress) {
+        if (item.progress.completed) checkedClass = 'checked';
+        else if (item.progress.skipped) checkedClass = 'skipped';
+      }
 
       itemRow.innerHTML = `
         <div class="item-check-checkbox ${checkedClass}" onclick="toggleItemComplete(event, '${item.path}')">
           <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          <svg class="skip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
         </div>
         ${typeIcon}
         <span class="outline-item-name" title="${item.name}">${item.name}</span>
@@ -688,13 +714,17 @@ function renderCourseResources() {
         typeIcon = '<svg class="outline-item-icon other" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
       }
 
-      // Checkbox checked state
-      const isCompleted = item.progress && item.progress.completed;
-      const checkedClass = isCompleted ? 'checked' : '';
+      // Checkbox checked/skipped state
+      let checkedClass = '';
+      if (item.progress) {
+        if (item.progress.completed) checkedClass = 'checked';
+        else if (item.progress.skipped) checkedClass = 'skipped';
+      }
 
       itemRow.innerHTML = `
         <div class="item-check-checkbox ${checkedClass}" onclick="toggleItemComplete(event, '${item.path}')">
           <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          <svg class="skip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
         </div>
         ${typeIcon}
         <span class="outline-item-name" title="${item.name}">${item.name}</span>
@@ -760,14 +790,30 @@ function filterCourseOutline() {
 // Update the header action button state based on the current active item progress
 function updateHeaderActionBtn() {
   const actionBtn = document.getElementById('btn-toggle-complete');
-  if (!actionBtn || !state.currentItem) return;
+  const skipBtn = document.getElementById('btn-toggle-skip');
+  if (!state.currentItem) return;
+
   const isCompleted = state.currentItem.progress && state.currentItem.progress.completed;
-  if (isCompleted) {
-    actionBtn.classList.add('completed');
-    actionBtn.querySelector('span').textContent = 'Completed';
-  } else {
-    actionBtn.classList.remove('completed');
-    actionBtn.querySelector('span').textContent = 'Mark Complete';
+  const isSkipped = state.currentItem.progress && state.currentItem.progress.skipped;
+
+  if (actionBtn) {
+    if (isCompleted) {
+      actionBtn.classList.add('completed');
+      actionBtn.querySelector('span').textContent = 'Completed';
+    } else {
+      actionBtn.classList.remove('completed');
+      actionBtn.querySelector('span').textContent = 'Mark Complete';
+    }
+  }
+
+  if (skipBtn) {
+    if (isSkipped) {
+      skipBtn.classList.add('skipped');
+      skipBtn.querySelector('span').textContent = 'Skipped';
+    } else {
+      skipBtn.classList.remove('skipped');
+      skipBtn.querySelector('span').textContent = 'Skip Lesson';
+    }
   }
 }
 
@@ -883,12 +929,25 @@ function initVideoPlayerEvents() {
   video.addEventListener('play', () => {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
     startProgressInterval();
+    
+    // Auto collapse sidebar when video is playing
+    const sidebar = document.getElementById('app-sidebar');
+    if (sidebar && !sidebar.classList.contains('collapsed')) {
+      setSidebarState(true);
+      state.sidebarAutoCollapsed = true;
+    }
   });
 
   video.addEventListener('pause', () => {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
     stopProgressInterval();
     saveVideoProgress(true); // Save progress instantly on pause
+    
+    // Auto expand sidebar if it was auto-collapsed
+    if (state.sidebarAutoCollapsed) {
+      setSidebarState(false);
+      state.sidebarAutoCollapsed = false;
+    }
   });
 
   video.addEventListener('timeupdate', () => {
@@ -917,6 +976,12 @@ function initVideoPlayerEvents() {
     stopProgressInterval();
     saveVideoProgress(true, true); // Save as completed
     triggerAutoplayCountdown();
+    
+    // Auto expand sidebar if it was auto-collapsed
+    if (state.sidebarAutoCollapsed) {
+      setSidebarState(false);
+      state.sidebarAutoCollapsed = false;
+    }
   });
 
   video.addEventListener('enterpictureinpicture', () => {
@@ -1209,12 +1274,12 @@ function syncCourseProgressMap(path, progressObj) {
     c.sections.forEach(sec => {
       sec.items.forEach(item => {
         if (item.path === path) {
-          const wasCompleted = !!(item.progress && item.progress.completed);
-          const isCompletedNow = !!(progressObj && progressObj.completed);
+          const wasFinished = !!(item.progress && (item.progress.completed || item.progress.skipped));
+          const isFinishedNow = !!(progressObj && (progressObj.completed || progressObj.skipped));
           
           item.progress = progressObj;
           
-          if (wasCompleted !== isCompletedNow) {
+          if (wasFinished !== isFinishedNow) {
             finishedCountChanged = true;
           }
         }
@@ -1239,7 +1304,7 @@ function recomputeTotalProgress() {
       sec.items.forEach(item => {
         totalItems++;
         if (item.progress) {
-          if (item.progress.completed) completedItems++;
+          if (item.progress.completed || item.progress.skipped) completedItems++;
           if (item.progress.lastStudied) hasProgress = true;
         }
       });
@@ -1265,6 +1330,10 @@ function recomputeTotalProgress() {
   if (state.currentCourse) {
     const updated = state.courses.find(c => c.id === state.currentCourse.id);
     document.getElementById('workspace-course-progress').textContent = `${updated.progressPercent}% Completed`;
+    const watchBtn = document.getElementById('btn-watch-course');
+    if (watchBtn) {
+      watchBtn.style.display = updated.progressPercent === 100 ? 'none' : '';
+    }
   }
 }
 
@@ -1339,6 +1408,44 @@ async function toggleCurrentItemComplete() {
   updateHeaderActionBtn();
   if (success && isNowCompleted) {
     playNextItem();
+  }
+}
+
+// Toggle current loaded item skip
+async function toggleCurrentItemSkip() {
+  if (!state.currentItem) return;
+  const isNowSkipped = !(state.currentItem.progress && state.currentItem.progress.skipped);
+  const success = await saveSkippedState(state.currentItem, isNowSkipped);
+  updateHeaderActionBtn();
+  if (success && isNowSkipped) {
+    playNextItem();
+  }
+}
+
+async function saveSkippedState(item, skipped) {
+  try {
+    const body = {
+      filePath: item.path,
+      skipped: skipped
+    };
+    
+    const res = await fetch(`${API_BASE}/api/progress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const progressObj = await res.json();
+    
+    syncCourseProgressMap(item.path, progressObj);
+    item.progress = progressObj;
+    
+    renderActiveWorkspaceOutline();
+    showToast(skipped ? 'Lesson marked as skipped!' : 'Lesson marked in-progress');
+    return true;
+  } catch (err) {
+    console.error(err);
+    showToast('Failed to save skip state');
+    return false;
   }
 }
 
@@ -1639,20 +1746,83 @@ async function confirmResetCourseProgressCard(event, courseId, courseTitle) {
   }
 }
 
-function toggleSidebar() {
+async function confirmWatchCourseProgress(event) {
+  if (event) event.stopPropagation();
+  if (!state.currentCourse) return;
+
+  const ans = confirm(`Are you sure you want to mark all resources in "${state.currentCourse.title}" as completed?`);
+  if (!ans) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/courses/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ courseId: state.currentCourse.id })
+    });
+    if (res.ok) {
+      showToast(`Course "${state.currentCourse.title}" marked as watched!`);
+      await refreshCatalog();
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to mark course as completed');
+  }
+}
+
+async function confirmWatchCourseProgressCard(event, courseId, courseTitle) {
+  if (event) event.stopPropagation();
+
+  const ans = confirm(`Are you sure you want to mark all resources in "${courseTitle}" as completed?`);
+  if (!ans) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/courses/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ courseId: courseId })
+    });
+    if (res.ok) {
+      showToast(`Course "${courseTitle}" marked as watched!`);
+      await refreshCatalog();
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to mark course as completed');
+  }
+}
+
+function setSidebarState(collapsed) {
   const sidebar = document.getElementById('app-sidebar');
   if (!sidebar) return;
   
-  const isCollapsed = sidebar.classList.toggle('collapsed');
+  const hasClass = sidebar.classList.contains('collapsed');
+  if (hasClass === collapsed) return;
   
-  // Store state in localStorage
-  localStorage.setItem('sidebar-collapsed', isCollapsed ? 'true' : 'false');
+  if (collapsed) {
+    sidebar.classList.add('collapsed');
+  } else {
+    sidebar.classList.remove('collapsed');
+  }
   
   // Update tooltip/title for both buttons
-  const titleText = isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar';
+  const titleText = collapsed ? 'Expand Sidebar' : 'Collapse Sidebar';
   const brandBtn = document.getElementById('brand-toggle-btn');
   const navBtn = document.getElementById('sidebar-toggle-btn');
   if (brandBtn) brandBtn.setAttribute('title', titleText);
   if (navBtn) navBtn.setAttribute('title', titleText);
+}
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('app-sidebar');
+  if (!sidebar) return;
+  
+  const isCollapsed = !sidebar.classList.contains('collapsed');
+  setSidebarState(isCollapsed);
+  
+  // Store state in localStorage
+  localStorage.setItem('sidebar-collapsed', isCollapsed ? 'true' : 'false');
+  
+  // Reset auto-collapsed flag when user manually toggles
+  state.sidebarAutoCollapsed = false;
 }
 

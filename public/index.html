@@ -170,10 +170,16 @@
                 <h3 id="workspace-course-title">Loading Course...</h3>
                 <div class="course-meta-row">
                   <span id="workspace-course-progress">0% Completed</span>
-                  <button class="reset-course-btn" id="btn-reset-course" onclick="confirmResetCourseProgress(event)" title="Reset all progress for this course">
-                    <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-                    Reset
-                  </button>
+                  <div class="workspace-course-actions" style="display: flex; gap: 4px; align-items: center;">
+                    <button class="watch-course-btn" id="btn-watch-course" onclick="confirmWatchCourseProgress(event)" title="Mark all progress for this course as watched">
+                      <svg class="watch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"/></svg>
+                      Mark Watched
+                    </button>
+                    <button class="reset-course-btn" id="btn-reset-course" onclick="confirmResetCourseProgress(event)" title="Reset all progress for this course">
+                      <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                      Reset
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -223,6 +229,10 @@
                 <button class="action-btn-secondary" id="btn-open-system" onclick="openInSystem()" title="Open in System Default App">
                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
                   Open in App
+                </button>
+                <button class="action-btn-secondary" id="btn-toggle-skip" onclick="toggleCurrentItemSkip()" title="Toggle Skipped Status">
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                  <span>Skip Lesson</span>
                 </button>
                 <button class="action-btn-primary" id="btn-toggle-complete" onclick="toggleCurrentItemComplete()" title="Toggle Completed Status">
                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"/></svg>
