@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const { exec } = require('child_process');
+const { SpeechClient } = require('@google-cloud/speech').v2;
+const { Storage } = require('@google-cloud/storage');
+const { VertexAI } = require('@google-cloud/vertexai');
 
 const app = express();
 const PORT = 3005;
@@ -22,13 +25,29 @@ let db = {
     '/Users/maulik/Downloads/courses',
     '/Users/maulik/Downloads/Mega Downloads'
   ],
-  progress: {}
+  progress: {},
+  gcpConfig: {
+    projectId: '',
+    bucketName: '',
+    location: 'global',
+    speechLocation: 'us-central1'
+  }
 };
 
 if (fs.existsSync(DB_FILE)) {
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
     db = JSON.parse(raw);
+    // Ensure gcpConfig exists
+    if (!db.gcpConfig) {
+      db.gcpConfig = {
+        projectId: '',
+        bucketName: '',
+        location: 'global',
+        speechLocation: 'us-central1'
+      };
+      saveDb();
+    }
   } catch (err) {
     console.error('Error reading db.json, creating new one', err);
   }
@@ -90,6 +109,9 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
           const newSectionName = currentSectionName === 'General' ? item.name : `${currentSectionName} / ${item.name}`;
           traverse(fullPath, newSectionName);
         } else if (item.isFile()) {
+          if (item.name.endsWith('.transcript.txt') || item.name.endsWith('.summary.md')) {
+            continue;
+          }
           const ext = path.extname(item.name).toLowerCase();
           let type = 'other';
 
@@ -604,6 +626,219 @@ app.post('/api/open-in-system', (req, res) => {
     }
     res.send({ success: true });
   });
+});
+
+// --- GCP CONFIG ENDPOINTS ---
+
+app.get('/api/gcp-config', (req, res) => {
+  res.send(db.gcpConfig || { projectId: '', bucketName: '', location: 'global', speechLocation: 'us-central1' });
+});
+
+app.post('/api/gcp-config', (req, res) => {
+  const { projectId, bucketName, location, speechLocation } = req.body;
+  db.gcpConfig = {
+    projectId: projectId || '',
+    bucketName: bucketName || '',
+    location: location || 'global',
+    speechLocation: speechLocation || 'us-central1'
+  };
+  saveDb();
+  res.send({ success: true, gcpConfig: db.gcpConfig });
+});
+
+// --- VIDEO EXTRA METADATA ENDPOINTS ---
+
+app.get('/api/video/metadata', (req, res) => {
+  const videoPath = req.query.path;
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    return res.status(400).send('Invalid file path');
+  }
+
+  const ext = path.extname(videoPath);
+  const baseWithoutExt = videoPath.slice(0, -ext.length);
+  const transcriptPath = baseWithoutExt + '.transcript.txt';
+  const summaryPath = baseWithoutExt + '.summary.md';
+
+  const metadata = {
+    hasTranscript: fs.existsSync(transcriptPath),
+    hasSummary: fs.existsSync(summaryPath),
+    transcript: '',
+    summary: ''
+  };
+
+  if (metadata.hasTranscript) {
+    try {
+      metadata.transcript = fs.readFileSync(transcriptPath, 'utf8');
+    } catch (err) {
+      console.error('Error reading transcript file:', err);
+    }
+  }
+
+  if (metadata.hasSummary) {
+    try {
+      metadata.summary = fs.readFileSync(summaryPath, 'utf8');
+    } catch (err) {
+      console.error('Error reading summary file:', err);
+    }
+  }
+
+  res.send(metadata);
+});
+
+app.post('/api/video/generate-transcript', async (req, res) => {
+  const videoPath = req.body.path;
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    return res.status(400).send({ error: 'Invalid file path' });
+  }
+
+  const gcp = db.gcpConfig || {};
+  if (!gcp.projectId || !gcp.bucketName) {
+    return res.status(400).send({ error: 'GCP Project ID and GCS Bucket Name must be configured in Settings.' });
+  }
+
+  const ext = path.extname(videoPath);
+  const baseWithoutExt = videoPath.slice(0, -ext.length);
+  const transcriptPath = baseWithoutExt + '.transcript.txt';
+  const summaryPath = baseWithoutExt + '.summary.md';
+
+  const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempAudioPath = path.join(__dirname, `temp_audio_${uniqueId}.wav`);
+  const gcsDestination = `course-viewer-transcripts/audio_${uniqueId}.wav`;
+  let gcsUri = null;
+
+  try {
+    // 1. Extract audio locally
+    console.log(`[FFmpeg] Extracting audio from ${videoPath}...`);
+    await new Promise((resolve, reject) => {
+      const cmd = `ffmpeg -i "${videoPath}" -vn -ac 1 -ar 16000 -y "${tempAudioPath}"`;
+      exec(cmd, (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+
+    // 2. Upload to GCS
+    console.log(`[GCS] Uploading to gs://${gcp.bucketName}/${gcsDestination}...`);
+    const storage = new Storage();
+    await storage.bucket(gcp.bucketName).upload(tempAudioPath, {
+      destination: gcsDestination
+    });
+    gcsUri = `gs://${gcp.bucketName}/${gcsDestination}`;
+
+    // 3. Transcribe with Speech-to-Text V2 Chirp
+    console.log(`[Speech-to-Text] Starting Chirp transcription...`);
+    const speechLocation = gcp.speechLocation || 'us-central1';
+    const speechClient = new SpeechClient({
+      apiEndpoint: `${speechLocation}-speech.googleapis.com`
+    });
+
+    const recognizerPath = `projects/${gcp.projectId}/locations/${speechLocation}/recognizers/_`;
+    const sttRequest = {
+      recognizer: recognizerPath,
+      files: [{ uri: gcsUri }],
+      config: {
+        languageCodes: ['en-US'],
+        model: 'chirp_2',
+        autoDecodingConfig: {}
+      },
+      recognitionOutputConfig: {
+        inlineResponseConfig: {}
+      }
+    };
+
+    const [operation] = await speechClient.batchRecognize(sttRequest);
+    const [sttResponse] = await operation.promise();
+
+    let transcript = '';
+    const results = sttResponse.results || {};
+    if (results[gcsUri] && results[gcsUri].transcript && results[gcsUri].transcript.results) {
+      transcript = results[gcsUri].transcript.results
+        .map(r => r.alternatives[0] ? r.alternatives[0].transcript : '')
+        .filter(Boolean)
+        .join(' ');
+    }
+
+    if (results[gcsUri] && results[gcsUri].error) {
+      throw new Error(`Speech-to-Text failed: ${results[gcsUri].error.message || 'Internal STT error'}`);
+    }
+
+    if (!transcript) {
+      throw new Error('Transcription returned empty text.');
+    }
+
+    // 4. Summarize with Vertex AI (Gemini 3.5 Flash)
+    console.log(`[Vertex AI] Summarizing with gemini-3.5-flash (location: ${gcp.location || 'global'})...`);
+    const location = gcp.location || 'global';
+    const vertexAI = new VertexAI({
+      project: gcp.projectId,
+      location: location,
+      apiEndpoint: location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`
+    });
+    const generativeModel = vertexAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
+
+    const prompt = `
+You are an AI assistant helping a student review course lecture material.
+Below is the raw transcript of a lecture. Please perform the following:
+1. Provide a concise, high-level summary of the main topics discussed (3-5 sentences).
+2. Create a bulleted list of key takeaways, concepts, or terms explained in the lecture.
+3. Formulate 2-3 review questions based on the content.
+
+Format the output nicely in Markdown.
+
+Here is the transcript:
+---
+${transcript}
+---
+`;
+
+    const genResult = await generativeModel.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    });
+
+    const responseObj = await genResult.response;
+    let summary = '';
+    try {
+      summary = responseObj.candidates[0].content.parts[0].text;
+    } catch (err) {
+      summary = responseObj.text || '';
+    }
+
+    if (!summary) {
+      throw new Error('Summarization returned empty text.');
+    }
+
+    // 5. Save files locally
+    fs.writeFileSync(transcriptPath, transcript, 'utf8');
+    fs.writeFileSync(summaryPath, summary, 'utf8');
+
+    res.send({
+      success: true,
+      transcript,
+      summary
+    });
+
+  } catch (err) {
+    console.error('Error generating transcript/summary:', err);
+    res.status(500).send({ error: err.message || 'Failed to generate transcript and summary' });
+  } finally {
+    // Clean up local temp file
+    if (fs.existsSync(tempAudioPath)) {
+      try {
+        fs.unlinkSync(tempAudioPath);
+      } catch (err) {
+        console.error('Error deleting local temp audio file:', err);
+      }
+    }
+    // Clean up GCS staging file
+    if (gcsUri) {
+      try {
+        const storage = new Storage();
+        await storage.bucket(gcp.bucketName).file(gcsDestination).delete();
+      } catch (err) {
+        console.error('Error deleting GCS file:', err);
+      }
+    }
+  }
 });
 
 // Start Server

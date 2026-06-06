@@ -253,87 +253,124 @@
 
               <!-- Video Player Interface -->
               <div class="viewer-player" id="viewer-video-container" style="display:none;">
-                <div class="video-wrapper">
-                  <video id="main-video-player" crossorigin="anonymous" playsinline>
-                    <!-- Video sources and tracks loaded dynamically -->
-                  </video>
+                <div class="player-left-col">
+                  <div class="video-wrapper">
+                    <video id="main-video-player" crossorigin="anonymous" playsinline>
+                      <!-- Video sources and tracks loaded dynamically -->
+                    </video>
 
-                  <!-- Autoplay Countdown Overlay -->
-                  <div class="autoplay-overlay" id="autoplay-overlay" style="display:none;">
-                    <div class="autoplay-content">
-                      <p>Up Next in <span id="autoplay-countdown">5</span> seconds</p>
-                      <h4 id="autoplay-next-title">Next Lesson Title</h4>
-                      <div class="autoplay-buttons">
-                        <button class="primary-btn" id="autoplay-play-now" onclick="triggerAutoplayNow()">Play Now</button>
-                        <button class="secondary-btn" id="autoplay-cancel" onclick="cancelAutoplay()">Cancel</button>
+                    <!-- Autoplay Countdown Overlay -->
+                    <div class="autoplay-overlay" id="autoplay-overlay" style="display:none;">
+                      <div class="autoplay-content">
+                        <p>Up Next in <span id="autoplay-countdown">5</span> seconds</p>
+                        <h4 id="autoplay-next-title">Next Lesson Title</h4>
+                        <div class="autoplay-buttons">
+                          <button class="primary-btn" id="autoplay-play-now" onclick="triggerAutoplayNow()">Play Now</button>
+                          <button class="secondary-btn" id="autoplay-cancel" onclick="cancelAutoplay()">Cancel</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Custom Video Controls (Overlaying or below the video) -->
+                  <div class="custom-video-controls">
+                    <div class="control-row progress-row">
+                      <input type="range" id="video-progress-slider" min="0" max="100" value="0" class="progress-slider" oninput="onVideoSliderChange()">
+                      <div class="time-display">
+                        <span id="video-current-time">00:00</span>
+                        <span class="time-divider">/</span>
+                        <span id="video-total-duration">00:00</span>
+                      </div>
+                    </div>
+                    <div class="control-row buttons-row">
+                      <div class="controls-left">
+                        <button class="control-btn" id="video-prev-btn" onclick="playPreviousItem()" title="Previous Lesson">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+                        </button>
+                        <button class="control-btn" id="video-play-btn" onclick="togglePlay()" title="Play/Pause">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="play-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        </button>
+                        <button class="control-btn" id="video-next-btn" onclick="playNextItem()" title="Next Lesson">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                        </button>
+                        <div class="volume-container">
+                          <button class="control-btn" id="video-mute-btn" onclick="toggleMute()" title="Mute/Unmute">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="volume-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                          </button>
+                          <input type="range" id="video-volume-slider" min="0" max="1" step="0.05" value="1" class="volume-slider" oninput="onVolumeSliderChange()">
+                        </div>
+                      </div>
+                      <div class="controls-right">
+                        <div class="shortcuts-container">
+                          <button class="control-btn" id="video-shortcuts-btn" onclick="toggleShortcutsMenu()" title="Keyboard Shortcuts (?)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                          </button>
+                          <div class="shortcuts-menu" id="shortcuts-dropdown-menu">
+                            <div class="shortcuts-header">Keyboard Shortcuts</div>
+                            <div class="shortcut-item"><span class="shortcut-key">Space</span><span class="shortcut-desc">Play / Pause</span></div>
+                            <div class="shortcut-item"><span class="shortcut-key">← / →</span><span class="shortcut-desc">Seek 10s</span></div>
+                            <div class="shortcut-item"><span class="shortcut-key">↑ / ↓</span><span class="shortcut-desc">Volume +/- 5%</span></div>
+                            <div class="shortcut-item"><span class="shortcut-key">[ / ]</span><span class="shortcut-desc">Speed +/- 0.1x</span></div>
+                            <div class="shortcut-item"><span class="shortcut-key">F</span><span class="shortcut-desc">Fullscreen</span></div>
+                            <div class="shortcut-item"><span class="shortcut-key">M</span><span class="shortcut-desc">Mute / Unmute</span></div>
+                            <div class="shortcut-item"><span class="shortcut-key">P</span><span class="shortcut-desc">Picture-in-Picture</span></div>
+                          </div>
+                        </div>
+                        <div class="speed-container">
+                          <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
+                          <div class="speed-menu" id="speed-dropdown-menu">
+                            <button onclick="setPlaybackRate(0.5)">0.5x</button>
+                            <button onclick="setPlaybackRate(1.0)" class="active">1.0x (Normal)</button>
+                            <button onclick="setPlaybackRate(1.25)">1.25x</button>
+                            <button onclick="setPlaybackRate(1.5)">1.5x</button>
+                            <button onclick="setPlaybackRate(1.75)">1.75x</button>
+                            <button onclick="setPlaybackRate(2.0)">2.0x</button>
+                            <button onclick="setPlaybackRate(2.5)">2.5x</button>
+                            <button onclick="setPlaybackRate(3.0)">3.0x</button>
+                          </div>
+                        </div>
+                        <button class="control-btn" id="video-pip-btn" onclick="togglePictureInPicture()" title="Picture-in-Picture (P)">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="13" y="12" width="7" height="6" rx="1" fill="currentColor"/></svg>
+                        </button>
+                        <button class="control-btn" id="video-extra-toggle-btn" onclick="toggleExtraSidebar()" title="Toggle Transcript/AI Summary Panel">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        </button>
+                        <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen (F)">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                        </button>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <!-- Custom Video Controls (Overlaying or below the video) -->
-                <div class="custom-video-controls">
-                  <div class="control-row progress-row">
-                    <input type="range" id="video-progress-slider" min="0" max="100" value="0" class="progress-slider" oninput="onVideoSliderChange()">
-                    <div class="time-display">
-                      <span id="video-current-time">00:00</span>
-                      <span class="time-divider">/</span>
-                      <span id="video-total-duration">00:00</span>
-                    </div>
+                <!-- AI Transcript & Summary Sidebar (Right Panel, Collapsed by default) -->
+                <div class="video-extra-sidebar collapsed" id="video-extra-sidebar">
+                  <div class="sidebar-tabs">
+                    <button class="sidebar-tab active" id="btn-tab-transcript" onclick="switchVideoExtraTab('transcript')">Transcript</button>
+                    <button class="sidebar-tab" id="btn-tab-summary" onclick="switchVideoExtraTab('summary')">AI Summary</button>
+                    <button class="sidebar-close-btn" onclick="toggleExtraSidebar()" title="Collapse Panel">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
                   </div>
-                  <div class="control-row buttons-row">
-                    <div class="controls-left">
-                      <button class="control-btn" id="video-prev-btn" onclick="playPreviousItem()" title="Previous Lesson">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
-                      </button>
-                      <button class="control-btn" id="video-play-btn" onclick="togglePlay()" title="Play/Pause">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="play-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                      </button>
-                      <button class="control-btn" id="video-next-btn" onclick="playNextItem()" title="Next Lesson">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
-                      </button>
-                      <div class="volume-container">
-                        <button class="control-btn" id="video-mute-btn" onclick="toggleMute()" title="Mute/Unmute">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="volume-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                  <div class="sidebar-content">
+                    <div class="sidebar-pane active" id="pane-transcript">
+                      <div class="pane-action-row">
+                        <button class="primary-btn small" id="btn-generate-transcript" onclick="generateTranscriptAndSummaryAction()">
+                          Generate AI Notes
                         </button>
-                        <input type="range" id="video-volume-slider" min="0" max="1" step="0.05" value="1" class="volume-slider" oninput="onVolumeSliderChange()">
+                        <div class="generation-spinner" id="gcp-loading-spinner" style="display: none;">
+                          <div class="spinner"></div>
+                          <span id="gcp-loading-status">Processing...</span>
+                        </div>
+                      </div>
+                      <div class="pane-text-body" id="transcript-body">
+                        <p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>
                       </div>
                     </div>
-                    <div class="controls-right">
-                      <div class="shortcuts-container">
-                        <button class="control-btn" id="video-shortcuts-btn" onclick="toggleShortcutsMenu()" title="Keyboard Shortcuts (?)">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                        </button>
-                        <div class="shortcuts-menu" id="shortcuts-dropdown-menu">
-                          <div class="shortcuts-header">Keyboard Shortcuts</div>
-                          <div class="shortcut-item"><span class="shortcut-key">Space</span><span class="shortcut-desc">Play / Pause</span></div>
-                          <div class="shortcut-item"><span class="shortcut-key">← / →</span><span class="shortcut-desc">Seek 10s</span></div>
-                          <div class="shortcut-item"><span class="shortcut-key">↑ / ↓</span><span class="shortcut-desc">Volume +/- 5%</span></div>
-                          <div class="shortcut-item"><span class="shortcut-key">[ / ]</span><span class="shortcut-desc">Speed +/- 0.1x</span></div>
-                          <div class="shortcut-item"><span class="shortcut-key">F</span><span class="shortcut-desc">Fullscreen</span></div>
-                          <div class="shortcut-item"><span class="shortcut-key">M</span><span class="shortcut-desc">Mute / Unmute</span></div>
-                          <div class="shortcut-item"><span class="shortcut-key">P</span><span class="shortcut-desc">Picture-in-Picture</span></div>
-                        </div>
+                    <div class="sidebar-pane" id="pane-summary">
+                      <div class="pane-text-body markdown-body" id="summary-body">
+                        <p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>
                       </div>
-                      <div class="speed-container">
-                        <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
-                        <div class="speed-menu" id="speed-dropdown-menu">
-                          <button onclick="setPlaybackRate(0.5)">0.5x</button>
-                          <button onclick="setPlaybackRate(1.0)" class="active">1.0x (Normal)</button>
-                          <button onclick="setPlaybackRate(1.25)">1.25x</button>
-                          <button onclick="setPlaybackRate(1.5)">1.5x</button>
-                          <button onclick="setPlaybackRate(1.75)">1.75x</button>
-                          <button onclick="setPlaybackRate(2.0)">2.0x</button>
-                          <button onclick="setPlaybackRate(2.5)">2.5x</button>
-                          <button onclick="setPlaybackRate(3.0)">3.0x</button>
-                        </div>
-                      </div>
-                      <button class="control-btn" id="video-pip-btn" onclick="togglePictureInPicture()" title="Picture-in-Picture (P)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="13" y="12" width="7" height="6" rx="1" fill="currentColor"/></svg>
-                      </button>
-                      <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen (F)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -425,6 +462,40 @@
               </button>
             </div>
             <p class="error-msg" id="add-folder-error"></p>
+          </div>
+
+          <!-- GCP Configuration Card -->
+          <div class="settings-card">
+            <h3>Google Cloud Configuration</h3>
+            <p class="card-desc">Configure your Google Cloud Project, Cloud Storage bucket, and regional endpoints. Staged audio files are automatically uploaded to GCS and cleaned up after transcription.</p>
+            
+            <div class="gcp-config-form" style="display: flex; flex-direction: column; gap: 16px; margin-top: 20px;">
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label for="gcp-project-id" style="font-size: 13px; font-weight: 600; color: var(--text-muted);">GCP Project ID</label>
+                <input type="text" id="gcp-project-id" class="folder-path-input" placeholder="e.g. gen-lang-client-0131109551" style="width: 100%;">
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <label for="gcp-bucket-name" style="font-size: 13px; font-weight: 600; color: var(--text-muted);">GCS Staging Bucket Name</label>
+                <input type="text" id="gcp-bucket-name" class="folder-path-input" placeholder="e.g. course-viewer-bucket-0131109551" style="width: 100%;">
+              </div>
+              <div style="display: flex; gap: 16px; width: 100%;">
+                <div style="display: flex; flex-direction: column; gap: 6px; flex: 1;">
+                  <label for="gcp-location" style="font-size: 13px; font-weight: 600; color: var(--text-muted);">Gemini Model Location (Vertex AI)</label>
+                  <input type="text" id="gcp-location" class="folder-path-input" placeholder="global" style="width: 100%;">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px; flex: 1;">
+                  <label for="gcp-speech-location" style="font-size: 13px; font-weight: 600; color: var(--text-muted);">Speech-to-Text Location (Chirp)</label>
+                  <input type="text" id="gcp-speech-location" class="folder-path-input" placeholder="us-central1" style="width: 100%;">
+                </div>
+              </div>
+              
+              <div style="display: flex; align-items: center; gap: 12px; margin-top: 8px;">
+                <button class="primary-btn" onclick="saveGcpConfig()" id="btn-save-gcp">
+                  Save Configuration
+                </button>
+                <span id="gcp-save-status" style="font-size: 13px; color: var(--color-success); display: none;">GCP Settings saved successfully!</span>
+              </div>
+            </div>
           </div>
 
           <!-- Utility Card -->

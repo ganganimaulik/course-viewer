@@ -148,6 +148,14 @@ async function refreshCatalog(isInitialLoad = false) {
     // Fetch watch folders config
     const configRes = await fetch(`${API_BASE}/api/config`);
     state.config = await configRes.json();
+
+    // Fetch GCP configuration
+    try {
+      const gcpRes = await fetch(`${API_BASE}/api/gcp-config`);
+      state.gcpConfig = await gcpRes.json();
+    } catch (e) {
+      console.warn('Error loading GCP config:', e);
+    }
     
     // Fetch courses with merged progress
     const coursesRes = await fetch(`${API_BASE}/api/courses`);
@@ -1020,6 +1028,20 @@ function loadVideoPlayer(item) {
 
   video.load();
   video.play().catch(e => console.log("Autoplay blocked by browser. User gesture required."));
+
+  // Restore sidebar state
+  const extraSidebar = document.getElementById('video-extra-sidebar');
+  if (extraSidebar) {
+    const isCollapsed = localStorage.getItem('video-extra-sidebar-collapsed') !== 'false';
+    if (isCollapsed) {
+      extraSidebar.classList.add('collapsed');
+    } else {
+      extraSidebar.classList.remove('collapsed');
+    }
+  }
+
+  // Load transcript and summary metadata
+  loadVideoMetadata(item);
 }
 
 function togglePlay() {
@@ -1615,20 +1637,73 @@ async function openInSystem() {
 // --- SETTINGS VIEW ACTIONS ---
 function renderSettings() {
   const tableBody = document.getElementById('watched-folders-table-body');
-  tableBody.innerHTML = '';
+  if (tableBody) {
+    tableBody.innerHTML = '';
+    state.config.folders.forEach(folder => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${folder}</td>
+        <td style="text-align:right;">
+          <button class="table-action-btn" onclick="removeFolder('${folder.replace(/'/g, "\\'")}')" title="Delete watched folder">
+            <svg class="table-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </td>
+      `;
+      tableBody.appendChild(tr);
+    });
+  }
 
-  state.config.folders.forEach(folder => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${folder}</td>
-      <td style="text-align:right;">
-        <button class="table-action-btn" onclick="removeFolder('${folder.replace(/'/g, "\\'")}')" title="Delete watched folder">
-          <svg class="table-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>
-      </td>
-    `;
-    tableBody.appendChild(tr);
-  });
+  // Populate GCP config fields
+  if (state.gcpConfig) {
+    const projInput = document.getElementById('gcp-project-id');
+    const bucketInput = document.getElementById('gcp-bucket-name');
+    const locInput = document.getElementById('gcp-location');
+    const speechLocInput = document.getElementById('gcp-speech-location');
+
+    if (projInput) projInput.value = state.gcpConfig.projectId || '';
+    if (bucketInput) bucketInput.value = state.gcpConfig.bucketName || '';
+    if (locInput) locInput.value = state.gcpConfig.location || 'global';
+    if (speechLocInput) speechLocInput.value = state.gcpConfig.speechLocation || 'us-central1';
+  }
+}
+
+async function saveGcpConfig() {
+  const projectId = document.getElementById('gcp-project-id').value.trim();
+  const bucketName = document.getElementById('gcp-bucket-name').value.trim();
+  const location = document.getElementById('gcp-location').value.trim() || 'global';
+  const speechLocation = document.getElementById('gcp-speech-location').value.trim() || 'us-central1';
+
+  const btn = document.getElementById('btn-save-gcp');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/gcp-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, bucketName, location, speechLocation })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      state.gcpConfig = data.gcpConfig;
+      
+      const status = document.getElementById('gcp-save-status');
+      if (status) {
+        status.style.display = 'inline-block';
+        setTimeout(() => {
+          status.style.display = 'none';
+        }, 3000);
+      }
+      showToast('GCP Configuration saved!');
+    } else {
+      showToast('Failed to save GCP Configuration');
+    }
+  } catch (err) {
+    console.error('Error saving GCP Config:', err);
+    showToast('Network error saving GCP config');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function addNewFolder() {
@@ -1824,5 +1899,176 @@ function toggleSidebar() {
   
   // Reset auto-collapsed flag when user manually toggles
   state.sidebarAutoCollapsed = false;
+}
+
+// --- VIDEO PLAYER EXTRA SIDEBAR LOGIC (TRANSCRIPT & AI SUMMARY) ---
+
+function toggleExtraSidebar() {
+  const sidebar = document.getElementById('video-extra-sidebar');
+  if (!sidebar) return;
+  
+  sidebar.classList.toggle('collapsed');
+  const collapsed = sidebar.classList.contains('collapsed');
+  localStorage.setItem('video-extra-sidebar-collapsed', collapsed ? 'true' : 'false');
+}
+
+function switchVideoExtraTab(tabName) {
+  const btnTranscript = document.getElementById('btn-tab-transcript');
+  const btnSummary = document.getElementById('btn-tab-summary');
+  const paneTranscript = document.getElementById('pane-transcript');
+  const paneSummary = document.getElementById('pane-summary');
+  
+  if (!btnTranscript || !btnSummary || !paneTranscript || !paneSummary) return;
+  
+  if (tabName === 'transcript') {
+    btnTranscript.classList.add('active');
+    btnSummary.classList.remove('active');
+    paneTranscript.classList.add('active');
+    paneSummary.classList.remove('active');
+  } else if (tabName === 'summary') {
+    btnSummary.classList.add('active');
+    btnTranscript.classList.remove('active');
+    paneSummary.classList.add('active');
+    paneTranscript.classList.remove('active');
+  }
+}
+
+async function loadVideoMetadata(item) {
+  const transcriptBody = document.getElementById('transcript-body');
+  const summaryBody = document.getElementById('summary-body');
+  if (!transcriptBody || !summaryBody) return;
+  
+  transcriptBody.innerHTML = '<p class="empty-pane-msg">Checking for transcript...</p>';
+  summaryBody.innerHTML = '<p class="empty-pane-msg">Checking for summary...</p>';
+  
+  try {
+    const res = await fetch(`${API_BASE}/api/video/metadata?path=${encodeURIComponent(item.path)}`);
+    if (!res.ok) throw new Error('Failed to load video metadata');
+    
+    const data = await res.json();
+    if (data.hasTranscript && data.transcript.trim()) {
+      transcriptBody.textContent = data.transcript;
+    } else {
+      transcriptBody.innerHTML = '<p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>';
+    }
+    
+    if (data.hasSummary && data.summary.trim()) {
+      summaryBody.innerHTML = parseMarkdown(data.summary);
+    } else {
+      summaryBody.innerHTML = '<p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>';
+    }
+  } catch (err) {
+    console.error('Error loading video metadata:', err);
+    transcriptBody.innerHTML = '<p class="empty-pane-msg">Error loading transcript.</p>';
+    summaryBody.innerHTML = '<p class="empty-pane-msg">Error loading summary.</p>';
+  }
+}
+
+async function generateTranscriptAndSummaryAction() {
+  if (!state.currentItem || state.currentItem.type !== 'video') {
+    showToast('No active video loaded.');
+    return;
+  }
+  
+  const genBtn = document.getElementById('btn-generate-transcript');
+  const spinner = document.getElementById('gcp-loading-spinner');
+  const statusSpan = document.getElementById('gcp-loading-status');
+  
+  if (!genBtn || !spinner) return;
+  
+  // Check settings configuration first
+  if (!state.gcpConfig || !state.gcpConfig.projectId || !state.gcpConfig.bucketName) {
+    showToast('Please configure GCP Settings first!');
+    switchView('settings');
+    return;
+  }
+  
+  genBtn.style.display = 'none';
+  spinner.style.display = 'flex';
+  if (statusSpan) statusSpan.textContent = 'Transcribing audio (takes a moment)...';
+  
+  try {
+    const res = await fetch(`${API_BASE}/api/video/generate-transcript`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: state.currentItem.path })
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Failed to generate transcription/summary');
+    }
+    
+    const data = await res.json();
+    showToast('AI Notes generated successfully!');
+    
+    // Refresh the metadata panel
+    await loadVideoMetadata(state.currentItem);
+  } catch (err) {
+    console.error('Generation failed:', err);
+    showToast(err.message || 'Error generating transcription/summary');
+  } finally {
+    genBtn.style.display = '';
+    spinner.style.display = 'none';
+  }
+}
+
+function parseMarkdown(md) {
+  if (!md) return '';
+  
+  let html = md;
+  // Escape HTML tags to prevent XSS
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Headers
+  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  
+  // Bold
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  
+  // Italic
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  
+  // Line-by-line list block parsing
+  const lines = html.split('\n');
+  let inList = false;
+  const processedLines = [];
+  
+  for (let line of lines) {
+    const trimmed = line.trim();
+    // Match line starting with asterisks or hyphen, like "* item" or "- item"
+    const listMatch = trimmed.match(/^[\*\-]\s+(.*)$/);
+    
+    if (listMatch) {
+      if (!inList) {
+        processedLines.push('<ul>');
+        inList = true;
+      }
+      processedLines.push(`<li>${listMatch[1]}</li>`);
+    } else {
+      if (inList) {
+        processedLines.push('</ul>');
+        inList = false;
+      }
+      if (trimmed === '') {
+        processedLines.push('<br>');
+      } else if (!trimmed.startsWith('<h') && !trimmed.startsWith('<u') && !trimmed.startsWith('<l')) {
+        processedLines.push(`<p>${line}</p>`);
+      } else {
+        processedLines.push(line);
+      }
+    }
+  }
+  
+  if (inList) {
+    processedLines.push('</ul>');
+  }
+  
+  return processedLines.join('\n');
 }
 

@@ -1208,8 +1208,9 @@ h1 {
   width: 100%;
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   background: #000;
+  overflow: hidden;
 }
 
 /* Ensure flex layout in fullscreen mode to prevent controls from being pushed off-screen */
@@ -1993,4 +1994,195 @@ h1 {
 .outline-item-icon.other {
   color: #94a3b8; /* cool slate */
 }
+
+/* --- SIDE-BY-SIDE VIDEO & TRANSCRIPT SIDEBAR --- */
+.player-left-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+
+.video-extra-sidebar {
+  width: 380px;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s;
+  overflow: hidden;
+}
+
+.video-extra-sidebar.collapsed {
+  width: 0;
+  border-left-color: transparent;
+}
+
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.15);
+  padding: 8px 16px;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  height: 48px;
+}
+
+.sidebar-tab {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-family-headings);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sidebar-tab:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sidebar-tab.active {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+}
+
+.sidebar-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.sidebar-close-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+}
+
+.sidebar-close-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-content {
+  flex-grow: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-pane {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sidebar-pane.active {
+  display: flex;
+}
+
+.pane-action-row {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.01);
+  flex-shrink: 0;
+}
+
+.pane-action-row .primary-btn.small {
+  padding: 8px 14px;
+  font-size: 12.5px;
+  border-radius: 8px;
+}
+
+.pane-text-body {
+  flex-grow: 1;
+  padding: 20px;
+  overflow-y: auto;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty-pane-msg {
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: 40px;
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Loading Spinner & Status */
+.generation-spinner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--color-secondary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Markdown styling inside AI Summary */
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  font-family: var(--font-family-headings);
+  color: var(--text-main);
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+.markdown-body h1 { font-size: 18px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; }
+.markdown-body h2 { font-size: 15px; }
+.markdown-body h3 { font-size: 13.5px; }
+.markdown-body p { margin-bottom: 12px; }
+.markdown-body ul, .markdown-body ol {
+  margin-bottom: 12px;
+  padding-left: 20px;
+}
+.markdown-body li {
+  margin-bottom: 4px;
+}
+.markdown-body strong {
+  color: var(--color-secondary);
+}
+.markdown-body hr {
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  margin: 16px 0;
+}
+
 
