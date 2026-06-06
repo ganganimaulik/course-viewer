@@ -5,7 +5,7 @@ const cors = require('cors');
 const { exec } = require('child_process');
 const { SpeechClient } = require('@google-cloud/speech').v2;
 const { Storage } = require('@google-cloud/storage');
-const { VertexAI } = require('@google-cloud/vertexai');
+const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 const PORT = 3005;
@@ -766,15 +766,14 @@ app.post('/api/video/generate-transcript', async (req, res) => {
       throw new Error('Transcription returned empty text.');
     }
 
-    // 4. Summarize with Vertex AI (Gemini 3.5 Flash)
+    // 4. Summarize with Vertex AI (Gemini 3.5 Flash) using new GoogleGenAI SDK
     console.log(`[Vertex AI] Summarizing with gemini-3.5-flash (location: ${gcp.location || 'global'})...`);
     const location = gcp.location || 'global';
-    const vertexAI = new VertexAI({
+    const ai = new GoogleGenAI({
+      enterprise: true,
       project: gcp.projectId,
       location: location,
-      apiEndpoint: location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`
     });
-    const generativeModel = vertexAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
 
     const prompt = `
 You are an AI assistant helping a student review course lecture material.
@@ -791,17 +790,12 @@ ${transcript}
 ---
 `;
 
-    const genResult = await generativeModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    const genResult = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents: prompt,
     });
 
-    const responseObj = await genResult.response;
-    let summary = '';
-    try {
-      summary = responseObj.candidates[0].content.parts[0].text;
-    } catch (err) {
-      summary = responseObj.text || '';
-    }
+    const summary = genResult.text;
 
     if (!summary) {
       throw new Error('Summarization returned empty text.');
