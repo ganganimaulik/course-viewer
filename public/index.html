@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Prism Dracula theme -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-dracula.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -198,6 +200,10 @@
                 <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r=".5" fill="currentColor"/></svg>
                 Resources
               </button>
+              <button class="workspace-tab" id="tab-course-summary" onclick="switchWorkspaceTab('course-summary')">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                Summary
+              </button>
             </div>
 
             <div class="outline-scroller" id="course-outline-list">
@@ -206,6 +212,13 @@
 
             <div class="outline-scroller" id="course-resources-list" style="display:none;">
               <!-- Dynamically populated accordion folders of resource files -->
+            </div>
+
+            <div class="outline-scroller" id="course-summary-sidebar-info" style="display:none; padding: 24px; color: var(--text-muted); font-size: 13px; line-height: 1.6;">
+              <h4 style="color: var(--text-main); margin-bottom: 8px; font-family: var(--font-family-headings); font-size: 14px; font-weight: 600;">Course Summary</h4>
+              <p style="margin-bottom: 12px;">This feature aggregates transcripts, notes, and subtitle files for all lectures, and uses Vertex AI Gemini to build a structured, master review guide.</p>
+              <p style="margin-bottom: 12px;">Redundancies and filler talk are auto-removed while retaining all core technical details.</p>
+              <p>You can regenerate the summary if files change or new transcripts are generated.</p>
             </div>
           </div>
 
@@ -230,6 +243,10 @@
                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
                   Open in App
                 </button>
+                <button class="action-btn-secondary" id="btn-toggle-ai-sidebar" onclick="toggleExtraSidebar()" title="Toggle AI Notes & Chat" style="display: none;">
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <span>AI Notes & Chat</span>
+                </button>
                 <button class="action-btn-secondary" id="btn-toggle-skip" onclick="toggleCurrentItemSkip()" title="Toggle Skipped Status">
                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
                   <span>Skip Lesson</span>
@@ -241,185 +258,305 @@
               </div>
             </header>
 
-            <!-- Playback / Display Workspace Containers -->
-            <div class="viewer-container" id="viewer-container">
-              
-              <!-- Blank State -->
-              <div class="blank-state active" id="viewer-blank">
-                <svg class="blank-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
-                <h3>Select a Lesson</h3>
-                <p>Choose a video, PDF document, HTML article, or text file from the left outline to start studying.</p>
-              </div>
+            <!-- Playback / Display Workspace Containers (wrapped in main content row) -->
+            <div class="workspace-main-content-row" style="display: flex; flex-direction: row; flex-grow: 1; overflow: hidden; width: 100%;">
+              <div class="viewer-container" id="viewer-container" style="flex: 1; position: relative;">
+                
+                <!-- Blank State -->
+                <div class="blank-state active" id="viewer-blank">
+                  <svg class="blank-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+                  <h3>Select a Lesson</h3>
+                  <p>Choose a video, PDF document, HTML article, or text file from the left outline to start studying.</p>
+                </div>
 
-              <!-- Video Player Interface -->
-              <div class="viewer-player" id="viewer-video-container" style="display:none;">
-                <div class="player-left-col">
-                  <div class="video-wrapper">
-                    <video id="main-video-player" crossorigin="anonymous" playsinline>
-                      <!-- Video sources and tracks loaded dynamically -->
-                    </video>
+                <!-- Video Player Interface -->
+                <div class="viewer-player" id="viewer-video-container" style="display:none;">
+                  <div class="player-left-col">
+                    <div class="video-wrapper">
+                      <video id="main-video-player" crossorigin="anonymous" playsinline>
+                        <!-- Video sources and tracks loaded dynamically -->
+                      </video>
 
-                    <!-- Autoplay Countdown Overlay -->
-                    <div class="autoplay-overlay" id="autoplay-overlay" style="display:none;">
-                      <div class="autoplay-content">
-                        <p>Up Next in <span id="autoplay-countdown">5</span> seconds</p>
-                        <h4 id="autoplay-next-title">Next Lesson Title</h4>
-                        <div class="autoplay-buttons">
-                          <button class="primary-btn" id="autoplay-play-now" onclick="triggerAutoplayNow()">Play Now</button>
-                          <button class="secondary-btn" id="autoplay-cancel" onclick="cancelAutoplay()">Cancel</button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Custom Video Controls (Overlaying or below the video) -->
-                  <div class="custom-video-controls">
-                    <div class="control-row progress-row">
-                      <input type="range" id="video-progress-slider" min="0" max="100" value="0" class="progress-slider" oninput="onVideoSliderChange()">
-                      <div class="time-display">
-                        <span id="video-current-time">00:00</span>
-                        <span class="time-divider">/</span>
-                        <span id="video-total-duration">00:00</span>
-                      </div>
-                    </div>
-                    <div class="control-row buttons-row">
-                      <div class="controls-left">
-                        <button class="control-btn" id="video-prev-btn" onclick="playPreviousItem()" title="Previous Lesson">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
-                        </button>
-                        <button class="control-btn" id="video-play-btn" onclick="togglePlay()" title="Play/Pause">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="play-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                        </button>
-                        <button class="control-btn" id="video-next-btn" onclick="playNextItem()" title="Next Lesson">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
-                        </button>
-                        <div class="volume-container">
-                          <button class="control-btn" id="video-mute-btn" onclick="toggleMute()" title="Mute/Unmute">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="volume-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-                          </button>
-                          <input type="range" id="video-volume-slider" min="0" max="1" step="0.05" value="1" class="volume-slider" oninput="onVolumeSliderChange()">
-                        </div>
-                      </div>
-                      <div class="controls-right">
-                        <div class="shortcuts-container">
-                          <button class="control-btn" id="video-shortcuts-btn" onclick="toggleShortcutsMenu()" title="Keyboard Shortcuts (?)">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                          </button>
-                          <div class="shortcuts-menu" id="shortcuts-dropdown-menu">
-                            <div class="shortcuts-header">Keyboard Shortcuts</div>
-                            <div class="shortcut-item"><span class="shortcut-key">Space</span><span class="shortcut-desc">Play / Pause</span></div>
-                            <div class="shortcut-item"><span class="shortcut-key">← / →</span><span class="shortcut-desc">Seek 10s</span></div>
-                            <div class="shortcut-item"><span class="shortcut-key">↑ / ↓</span><span class="shortcut-desc">Volume +/- 5%</span></div>
-                            <div class="shortcut-item"><span class="shortcut-key">[ / ]</span><span class="shortcut-desc">Speed +/- 0.1x</span></div>
-                            <div class="shortcut-item"><span class="shortcut-key">F</span><span class="shortcut-desc">Fullscreen</span></div>
-                            <div class="shortcut-item"><span class="shortcut-key">M</span><span class="shortcut-desc">Mute / Unmute</span></div>
-                            <div class="shortcut-item"><span class="shortcut-key">P</span><span class="shortcut-desc">Picture-in-Picture</span></div>
+                      <!-- Autoplay Countdown Overlay -->
+                      <div class="autoplay-overlay" id="autoplay-overlay" style="display:none;">
+                        <div class="autoplay-content">
+                          <p>Up Next in <span id="autoplay-countdown">5</span> seconds</p>
+                          <h4 id="autoplay-next-title">Next Lesson Title</h4>
+                          <div class="autoplay-buttons">
+                            <button class="primary-btn" id="autoplay-play-now" onclick="triggerAutoplayNow()">Play Now</button>
+                            <button class="secondary-btn" id="autoplay-cancel" onclick="cancelAutoplay()">Cancel</button>
                           </div>
                         </div>
-                        <div class="speed-container">
-                          <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
-                          <div class="speed-menu" id="speed-dropdown-menu">
-                            <button onclick="setPlaybackRate(0.5)">0.5x</button>
-                            <button onclick="setPlaybackRate(1.0)" class="active">1.0x (Normal)</button>
-                            <button onclick="setPlaybackRate(1.25)">1.25x</button>
-                            <button onclick="setPlaybackRate(1.5)">1.5x</button>
-                            <button onclick="setPlaybackRate(1.75)">1.75x</button>
-                            <button onclick="setPlaybackRate(2.0)">2.0x</button>
-                            <button onclick="setPlaybackRate(2.5)">2.5x</button>
-                            <button onclick="setPlaybackRate(3.0)">3.0x</button>
+                      </div>
+                    </div>
+
+                    <!-- Custom Video Controls (Overlaying or below the video) -->
+                    <div class="custom-video-controls">
+                      <div class="control-row progress-row">
+                        <input type="range" id="video-progress-slider" min="0" max="100" value="0" class="progress-slider" oninput="onVideoSliderChange()">
+                        <div class="time-display">
+                          <span id="video-current-time">00:00</span>
+                          <span class="time-divider">/</span>
+                          <span id="video-total-duration">00:00</span>
+                        </div>
+                      </div>
+                      <div class="control-row buttons-row">
+                        <div class="controls-left">
+                          <button class="control-btn" id="video-prev-btn" onclick="playPreviousItem()" title="Previous Lesson">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+                          </button>
+                          <button class="control-btn" id="video-play-btn" onclick="togglePlay()" title="Play/Pause">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="play-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                          </button>
+                          <button class="control-btn" id="video-next-btn" onclick="playNextItem()" title="Next Lesson">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                          </button>
+                          <div class="volume-container">
+                            <button class="control-btn" id="video-mute-btn" onclick="toggleMute()" title="Mute/Unmute">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="volume-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                            </button>
+                            <input type="range" id="video-volume-slider" min="0" max="1" step="0.05" value="1" class="volume-slider" oninput="onVolumeSliderChange()">
                           </div>
                         </div>
-                        <button class="control-btn" id="video-pip-btn" onclick="togglePictureInPicture()" title="Picture-in-Picture (P)">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="13" y="12" width="7" height="6" rx="1" fill="currentColor"/></svg>
-                        </button>
-                        <button class="control-btn" id="video-extra-toggle-btn" onclick="toggleExtraSidebar()" title="Toggle Transcript/AI Summary Panel">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                        </button>
-                        <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen (F)">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- AI Transcript & Summary Sidebar (Right Panel, Collapsed by default) -->
-                <div class="video-extra-sidebar collapsed" id="video-extra-sidebar">
-                  <div class="sidebar-tabs">
-                    <button class="sidebar-tab active" id="btn-tab-transcript" onclick="switchVideoExtraTab('transcript')">Transcript</button>
-                    <button class="sidebar-tab" id="btn-tab-summary" onclick="switchVideoExtraTab('summary')">AI Summary</button>
-                    <button class="sidebar-close-btn" onclick="toggleExtraSidebar()" title="Collapse Panel">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                    </button>
-                  </div>
-                  <div class="sidebar-content">
-                    <div class="sidebar-pane active" id="pane-transcript">
-                      <div class="pane-action-row">
-                        <button class="primary-btn small" id="btn-generate-transcript" onclick="generateTranscriptAndSummaryAction()">
-                          Generate AI Notes
-                        </button>
-                        <div class="generation-spinner" id="gcp-loading-spinner" style="display: none;">
-                          <div class="spinner"></div>
-                          <span id="gcp-loading-status">Processing...</span>
+                        <div class="controls-right">
+                          <div class="shortcuts-container">
+                            <button class="control-btn" id="video-shortcuts-btn" onclick="toggleShortcutsMenu()" title="Keyboard Shortcuts (?)">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            </button>
+                            <div class="shortcuts-menu" id="shortcuts-dropdown-menu">
+                              <div class="shortcuts-header">Keyboard Shortcuts</div>
+                              <div class="shortcut-item"><span class="shortcut-key">Space</span><span class="shortcut-desc">Play / Pause</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">← / →</span><span class="shortcut-desc">Seek 10s</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">↑ / ↓</span><span class="shortcut-desc">Volume +/- 5%</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">[ / ]</span><span class="shortcut-desc">Speed +/- 0.1x</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">F</span><span class="shortcut-desc">Fullscreen</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">M</span><span class="shortcut-desc">Mute / Unmute</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">P</span><span class="shortcut-desc">Picture-in-Picture</span></div>
+                            </div>
+                          </div>
+                          <div class="speed-container">
+                            <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
+                            <div class="speed-menu" id="speed-dropdown-menu">
+                              <button onclick="setPlaybackRate(0.5)">0.5x</button>
+                              <button onclick="setPlaybackRate(1.0)" class="active">1.0x (Normal)</button>
+                              <button onclick="setPlaybackRate(1.25)">1.25x</button>
+                              <button onclick="setPlaybackRate(1.5)">1.5x</button>
+                              <button onclick="setPlaybackRate(1.75)">1.75x</button>
+                              <button onclick="setPlaybackRate(2.0)">2.0x</button>
+                              <button onclick="setPlaybackRate(2.5)">2.5x</button>
+                              <button onclick="setPlaybackRate(3.0)">3.0x</button>
+                            </div>
+                          </div>
+                          <button class="control-btn" id="video-pip-btn" onclick="togglePictureInPicture()" title="Picture-in-Picture (P)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="13" y="12" width="7" height="6" rx="1" fill="currentColor"/></svg>
+                          </button>
+                          <button class="control-btn" id="video-extra-toggle-btn" onclick="toggleExtraSidebar()" title="Toggle Transcript/AI Summary Panel">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                          </button>
+                          <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen (F)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                          </button>
                         </div>
                       </div>
-                      <div class="pane-text-body" id="transcript-body">
-                        <p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- PDF Viewer Container -->
+                <div class="viewer-iframe" id="viewer-pdf-container" style="display:none;">
+                  <iframe id="pdf-frame" src="" type="application/pdf"></iframe>
+                </div>
+
+                <!-- HTML Viewer Container -->
+                <div class="viewer-iframe" id="viewer-html-container" style="display:none;">
+                  <iframe id="html-frame" src=""></iframe>
+                </div>
+
+                <!-- Markdown/Text Viewer Container -->
+                <div class="viewer-text" id="viewer-text-container" style="display:none;">
+                  <div class="text-content-card">
+                    <pre id="text-pre-content" style="display: none;">Loading content...</pre>
+                    <div id="text-markdown-content" class="markdown-body" style="display: none;"></div>
+                  </div>
+                </div>
+
+                <!-- Image Viewer Container -->
+                <div class="viewer-image" id="viewer-image-container" style="display:none;">
+                  <div class="image-content-card">
+                    <img id="image-view-element" src="" alt="Course Resource Image" />
+                  </div>
+                </div>
+
+                <!-- Unrecognized/General File Container -->
+                <div class="viewer-other" id="viewer-other-container" style="display:none;">
+                  <div class="other-file-card">
+                    <svg class="file-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <h3 id="other-file-name">file_name.zip</h3>
+                    <p>This file type (<span id="other-file-ext">.zip</span>) cannot be viewed directly inside the browser player.</p>
+                    <div class="other-file-buttons">
+                      <button class="primary-btn" onclick="openInSystem()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+                        Open in Default Application
+                      </button>
+                      <button class="secondary-btn" onclick="revealInFinder()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        Reveal in Finder
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Course Summary Viewer Container -->
+                <div class="viewer-text" id="viewer-course-summary-container" style="display:none; overflow-y: hidden; padding: 24px; height: 100%; width: 100%; box-sizing: border-box; justify-content: center;">
+                  <div style="display: flex; gap: 24px; width: 100%; max-width: 1400px; height: 100%; align-items: stretch; justify-content: center; box-sizing: border-box;">
+                    
+                    <!-- Left Panel: Summary Details -->
+                    <div class="text-content-card markdown-body" style="flex: 1; padding: 40px; border: 1px solid var(--border-color); background: var(--bg-panel); border-radius: 16px; box-shadow: var(--shadow-main); box-sizing: border-box; overflow-y: auto; height: 100%;">
+                      <!-- Title and Action Header -->
+                      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 20px; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; width: 100%; box-sizing: border-box;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                          <div style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--color-primary); box-shadow: 0 0 12px rgba(139, 92, 246, 0.2); flex-shrink: 0;">
+                            <svg style="width: 22px; height: 22px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                          </div>
+                          <div>
+                            <h1 id="course-summary-heading-title" style="margin: 0; border: none; font-size: 24px; font-weight: 700; color: var(--text-main); font-family: var(--font-family-headings);">Course Master Summary</h1>
+                            <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-muted);">Unified summary and key takeaways for the entire course</p>
+                          </div>
+                        </div>
+                        <div id="course-summary-actions" style="display: flex; gap: 8px; align-items: center;">
+                          <button class="secondary-btn" id="btn-toggle-course-chat" onclick="toggleCourseChat()" style="display: none; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            Chat with Course
+                          </button>
+                          <button class="primary-btn" id="btn-generate-course-summary" onclick="generateCourseSummaryAction()" style="display: flex; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                            Generate Course Summary
+                          </button>
+                        </div>
+                      </div>
+
+                      <!-- Summary Scope Selector Card -->
+                      <div id="summary-scope-card" class="summary-scope-card" style="display: none;">
+                        <h3 onclick="toggleSummaryScopeCard()">Configure Master Summary Scope</h3>
+                        <div class="scope-presets">
+                          <button type="button" onclick="setScopePreset('all')">Select All</button>
+                          <button type="button" onclick="setScopePreset('none')">Select None</button>
+                          <button type="button" onclick="setScopePreset('videos')">Videos Only</button>
+                          <button type="button" onclick="setScopePreset('documents')">Documents Only</button>
+                        </div>
+                        <div id="summary-scope-files-list" class="scope-files-list">
+                          <!-- Rendered dynamically -->
+                        </div>
+                      </div>
+
+                      <!-- Progress / Processing Area -->
+                      <div id="course-summary-progress-container" style="display: none; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 24px; flex-direction: column; gap: 16px; width: 100%; box-sizing: border-box;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                          <span id="course-summary-status-text" style="font-size: 14px; font-weight: 600; color: var(--color-secondary);">Initializing...</span>
+                          <div class="spinner" style="width: 20px; height: 20px;"></div>
+                        </div>
+                        <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden;">
+                          <div id="course-summary-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--color-primary), var(--color-secondary)); transition: width 0.3s ease;"></div>
+                        </div>
+                        <div id="course-summary-log" style="font-family: monospace; font-size: 12px; color: var(--text-muted); max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; border: 1px solid var(--border-light); white-space: pre-wrap; line-height: 1.5; width: 100%; box-sizing: border-box; text-align: left;">
+                        </div>
+                      </div>
+
+                      <!-- Content Area -->
+                      <div id="course-summary-content" class="markdown-body" style="width: 100%; text-align: left;">
+                        <p class="empty-pane-msg" style="text-align: center; color: var(--text-dim); padding: 40px 0;">No course-level summary generated yet. Click "Generate Course Summary" to analyze all lessons and extract key takeaways.</p>
                       </div>
                     </div>
-                    <div class="sidebar-pane" id="pane-summary">
-                      <div class="pane-text-body markdown-body" id="summary-body">
-                        <p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>
+
+                    <!-- Right Panel: Course AI Chat -->
+                    <div id="course-chat-panel" style="width: 420px; display: none; border: 1px solid var(--border-color); background: var(--bg-panel); border-radius: 16px; box-shadow: var(--shadow-main); box-sizing: border-box; flex-direction: column; height: 100%; overflow: hidden; animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;">
+                      <div style="display: flex; border-bottom: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.15); padding: 12px 16px; align-items: center; justify-content: space-between; flex-shrink: 0; height: 56px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                          <div style="width: 8px; height: 8px; background: var(--color-secondary); border-radius: 50%; box-shadow: 0 0 8px var(--color-secondary);"></div>
+                          <span style="font-family: var(--font-family-headings); font-size: 14px; font-weight: 700; color: var(--text-main);">Course AI Assistant</span>
+                        </div>
+                        <button class="sidebar-close-btn" onclick="toggleCourseChat()" title="Close Chat" style="margin-left: auto;">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                        </button>
+                      </div>
+                      
+                      <div class="chat-container" style="flex-grow: 1; height: calc(100% - 56px);">
+                        <div class="chat-messages" id="course-chat-messages-body">
+                          <p class="empty-pane-msg">Ask any question about the entire course content, summaries, or cross-topic relationships.</p>
+                        </div>
+                        
+                        <div class="chat-suggestions" id="course-chat-suggestions-list">
+                          <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Provide a high-level course overview.')">Provide course overview</button>
+                          <button class="suggestion-tag" onclick="sendCourseQuickQuestion('What are the key technical concepts or terminology introduced?')">List key technical concepts</button>
+                          <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Synthesize a list of study review questions for this course.')">Generate a review sheet</button>
+                        </div>
+
+                        <div class="chat-input-wrapper">
+                          <textarea id="course-chat-user-input" class="chat-input" placeholder="Ask a question about this course..." rows="1" onkeydown="handleCourseChatInputKeyDown(event)"></textarea>
+                          <button class="primary-btn chat-send-btn" id="btn-course-chat-send" onclick="sendCourseChatMessage()" title="Send question">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px; height:16px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+              </div> <!-- closes #viewer-container -->
+
+              <!-- AI Transcript & Summary Sidebar (Right Panel, Collapsed by default, shared between viewers) -->
+              <div class="video-extra-sidebar collapsed" id="video-extra-sidebar">
+                <div class="sidebar-tabs">
+                  <button class="sidebar-tab active" id="btn-tab-transcript" onclick="switchVideoExtraTab('transcript')">Transcript</button>
+                  <button class="sidebar-tab" id="btn-tab-summary" onclick="switchVideoExtraTab('summary')">AI Summary</button>
+                  <button class="sidebar-tab" id="btn-tab-chat" onclick="switchVideoExtraTab('chat')">Ask AI</button>
+                  <button class="sidebar-close-btn" onclick="toggleExtraSidebar()" title="Collapse Panel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                  </button>
+                </div>
+                <div class="sidebar-content">
+                  <div class="sidebar-pane active" id="pane-transcript">
+                    <div class="pane-action-row">
+                      <button class="primary-btn small" id="btn-generate-transcript" onclick="generateTranscriptAndSummaryAction()">
+                        Generate AI Notes
+                      </button>
+                      <div class="generation-spinner" id="gcp-loading-spinner" style="display: none;">
+                        <div class="spinner"></div>
+                        <span id="gcp-loading-status">Processing...</span>
+                      </div>
+                    </div>
+                    <div class="pane-text-body" id="transcript-body">
+                      <p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>
+                    </div>
+                  </div>
+                  <div class="sidebar-pane" id="pane-summary">
+                    <div class="pane-text-body markdown-body" id="summary-body">
+                      <p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>
+                    </div>
+                  </div>
+                  <div class="sidebar-pane" id="pane-chat">
+                    <div class="chat-container">
+                      <div class="chat-messages" id="chat-messages-body">
+                        <p class="empty-pane-msg">Ask questions about this lecture's transcript. Start by typing a question below or selecting a suggestion.</p>
+                      </div>
+                      <div class="chat-suggestions" id="chat-suggestions-list">
+                        <button class="suggestion-tag" onclick="sendQuickQuestion('Summarize the key takeaways of this lecture.')">Summarize takeaways</button>
+                        <button class="suggestion-tag" onclick="sendQuickQuestion('What are the main concepts or definitions explained?')">Explain main concepts</button>
+                        <button class="suggestion-tag" onclick="sendQuickQuestion('Formulate a few practice questions based on this video.')">Practice questions</button>
+                      </div>
+                      <div class="chat-input-wrapper">
+                        <textarea id="chat-user-input" class="chat-input" placeholder="Ask a question about this lecture..." rows="1" onkeydown="handleChatInputKeyDown(event)"></textarea>
+                        <button class="primary-btn chat-send-btn" id="btn-chat-send" onclick="sendChatMessage()" title="Send question">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px; height:16px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </button>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <!-- PDF Viewer Container -->
-              <div class="viewer-iframe" id="viewer-pdf-container" style="display:none;">
-                <iframe id="pdf-frame" src="" type="application/pdf"></iframe>
-              </div>
-
-              <!-- HTML Viewer Container -->
-              <div class="viewer-iframe" id="viewer-html-container" style="display:none;">
-                <iframe id="html-frame" src=""></iframe>
-              </div>
-
-              <!-- Markdown/Text Viewer Container -->
-              <div class="viewer-text" id="viewer-text-container" style="display:none;">
-                <div class="text-content-card">
-                  <pre id="text-pre-content">Loading content...</pre>
-                </div>
-              </div>
-
-              <!-- Image Viewer Container -->
-              <div class="viewer-image" id="viewer-image-container" style="display:none;">
-                <div class="image-content-card">
-                  <img id="image-view-element" src="" alt="Course Resource Image" />
-                </div>
-              </div>
-
-              <!-- Unrecognized/General File Container -->
-              <div class="viewer-other" id="viewer-other-container" style="display:none;">
-                <div class="other-file-card">
-                  <svg class="file-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                  <h3 id="other-file-name">file_name.zip</h3>
-                  <p>This file type (<span id="other-file-ext">.zip</span>) cannot be viewed directly inside the browser player.</p>
-                  <div class="other-file-buttons">
-                    <button class="primary-btn" onclick="openInSystem()">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
-                      Open in Default Application
-                    </button>
-                    <button class="secondary-btn" onclick="revealInFinder()">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                      Reveal in Finder
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-            </div>
+            </div> <!-- closes .workspace-main-content-row -->
           </div>
           
         </div>
@@ -520,6 +657,11 @@
     <span id="toast-message">Progress saved successfully</span>
   </div>
 
+  <!-- Marked.js for markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Prism.js core and autoloader plugin for syntax highlighting -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

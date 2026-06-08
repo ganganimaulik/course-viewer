@@ -62,9 +62,11 @@ npm install -g pm2
 ```
 
 ### 2. Start the Application
-From the repository root directory, start the server:
+From the repository root directory, start the server using the PM2 ecosystem configuration:
 ```bash
-pm2 start server.js --name "course-viewer"
+pm2 start ecosystem.config.js
+# Or via npm script:
+npm run pm2:start
 ```
 
 ### 3. Configure PM2 Startup
@@ -81,11 +83,11 @@ pm2 save
 ```
 
 ### 5. Managing the Service
-- **Check Status:** `pm2 status`
+- **Check Status:** `pm2 status` or `pm2 show course-viewer`
 - **View Logs:** `pm2 logs course-viewer`
-- **Restart Application:** `pm2 restart course-viewer`
-- **Temporarily Stop Application:** `pm2 stop course-viewer`
-- **Start/Re-enable Application:** `pm2 start course-viewer`
+- **Restart Application:** `pm2 restart course-viewer` (or `npm run pm2:restart`)
+- **Temporarily Stop Application:** `pm2 stop course-viewer` (or `npm run pm2:stop`)
+- **Delete Application from Registry:** `pm2 delete course-viewer` (or `npm run pm2:delete`)
 
 ### 6. Disable PM2 Autostart Completely
 If you want to remove the application from PM2 and disable autostart on system boot:

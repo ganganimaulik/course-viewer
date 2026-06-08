@@ -14,7 +14,9 @@ let state = {
   lastSavedTime: 0,
   autoplayTimer: null,
   currentWorkspaceTab: 'lessons',
-  sidebarAutoCollapsed: false
+  sidebarAutoCollapsed: false,
+  chatHistory: [],
+  courseChatHistory: []
 };
 
 // Toast notification function
@@ -76,7 +78,73 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   initKeyboardShortcuts();
+
+  // Intercept clicks on timestamp links
+  document.addEventListener('click', (e) => {
+    const anchor = e.target.closest('a');
+    if (anchor) {
+      const href = anchor.getAttribute('href');
+      if (href && href.startsWith('timestamp:')) {
+        e.preventDefault();
+        handleTimestampClick(href);
+      }
+    }
+  });
 });
+
+// Click-to-seek timestamp handler
+function handleTimestampClick(href) {
+  const urlPart = href.substring('timestamp:'.length);
+  const [encodedPath, secondsStr] = urlPart.split('#');
+  const relativePath = decodeURIComponent(encodedPath);
+  const seconds = parseFloat(secondsStr);
+
+  console.log('Timestamp clicked:', relativePath, seconds);
+
+  if (!state.currentCourse) return;
+
+  let foundItem = null;
+  let foundSection = null;
+
+  for (const section of state.currentCourse.sections) {
+    const item = section.items.find(i => i.relativePath === relativePath);
+    if (item) {
+      foundItem = item;
+      foundSection = section;
+      break;
+    }
+  }
+
+  if (!foundItem) {
+    const basename = relativePath.split('/').pop();
+    for (const section of state.currentCourse.sections) {
+      const item = section.items.find(i => i.name === basename);
+      if (item) {
+        foundItem = item;
+        foundSection = section;
+        break;
+      }
+    }
+  }
+
+  if (foundItem) {
+    switchWorkspaceTab('lessons');
+
+    const isSameItem = state.currentItem && state.currentItem.path === foundItem.path;
+    if (isSameItem) {
+      const video = document.getElementById('main-video-player');
+      if (video) {
+        video.currentTime = seconds;
+        video.play().catch(err => console.log('Play failed:', err));
+      }
+    } else {
+      state.pendingSeekTime = seconds;
+      selectItem(foundItem, foundSection);
+    }
+  } else {
+    console.error('Could not find course item matching:', relativePath);
+  }
+}
 
 // --- ROUTING / VIEW SWITCHER ---
 function switchView(viewId) {
@@ -480,6 +548,13 @@ function openCourse(courseId, restoreItemPath = null) {
   if (!course) return;
 
   state.currentCourse = course;
+  state.courseChatHistory = [];
+  
+  const chatPanel = document.getElementById('course-chat-panel');
+  if (chatPanel) chatPanel.style.display = 'none';
+  const toggleBtn = document.getElementById('btn-toggle-course-chat');
+  if (toggleBtn) toggleBtn.style.display = 'none';
+
   localStorage.setItem('current-course-id', courseId);
   if (!restoreItemPath) {
     localStorage.removeItem('current-item-path');
@@ -496,58 +571,37 @@ function openCourse(courseId, restoreItemPath = null) {
   
   // Restore tab
   const storedTab = localStorage.getItem('current-workspace-tab') || 'lessons';
-  state.currentWorkspaceTab = storedTab;
-  const tabLessons = document.getElementById('tab-lessons');
-  const tabResources = document.getElementById('tab-resources');
-  if (tabLessons) {
-    if (storedTab === 'lessons') tabLessons.classList.add('active');
-    else tabLessons.classList.remove('active');
-  }
-  if (tabResources) {
-    if (storedTab === 'resources') tabResources.classList.add('active');
-    else tabResources.classList.remove('active');
-  }
-  
-  const listLessons = document.getElementById('course-outline-list');
-  const listResources = document.getElementById('course-resources-list');
-  if (listLessons) listLessons.style.display = storedTab === 'lessons' ? 'block' : 'none';
-  if (listResources) listResources.style.display = storedTab === 'resources' ? 'block' : 'none';
+  switchWorkspaceTab(storedTab);
 
-  const searchInput = document.getElementById('outline-search');
-  if (searchInput) {
-    searchInput.value = '';
-    searchInput.placeholder = storedTab === 'lessons' ? 'Search lectures...' : 'Search resources...';
-  }
+  if (storedTab !== 'course-summary') {
+    // Load blank state viewer or restored item
+    if (restoreItemPath) {
+      let foundItem = null;
+      let foundSection = null;
+      course.sections.forEach(sec => {
+        const it = sec.items.find(i => i.path === restoreItemPath);
+        if (it) {
+          foundItem = it;
+          foundSection = sec;
+        }
+      });
 
-  renderActiveWorkspaceOutline();
-
-  // Load blank state viewer or restored item
-  if (restoreItemPath) {
-    let foundItem = null;
-    let foundSection = null;
-    course.sections.forEach(sec => {
-      const it = sec.items.find(i => i.path === restoreItemPath);
-      if (it) {
-        foundItem = it;
-        foundSection = sec;
+      if (foundItem) {
+        selectItem(foundItem, foundSection);
+      } else {
+        showViewerPanel('blank');
+        document.getElementById('file-actions-bar').style.display = 'none';
       }
-    });
-
-    if (foundItem) {
-      selectItem(foundItem, foundSection);
     } else {
       showViewerPanel('blank');
       document.getElementById('file-actions-bar').style.display = 'none';
     }
-  } else {
-    showViewerPanel('blank');
-    document.getElementById('file-actions-bar').style.display = 'none';
   }
-  
+
   // Set breadcrumbs initial
   document.getElementById('crumb-course').textContent = 'Dashboard';
   document.getElementById('crumb-section').textContent = course.title;
-  if (!restoreItemPath) {
+  if (storedTab !== 'course-summary' && !restoreItemPath) {
     document.getElementById('crumb-item').textContent = '';
     document.getElementById('crumb-item').classList.remove('active');
   }
@@ -754,33 +808,93 @@ function renderCourseResources() {
 }
 
 function switchWorkspaceTab(tabName) {
-  if (tabName !== 'lessons' && tabName !== 'resources') return;
+  if (tabName !== 'lessons' && tabName !== 'resources' && tabName !== 'course-summary') return;
   state.currentWorkspaceTab = tabName;
   localStorage.setItem('current-workspace-tab', tabName);
 
   const tabLessons = document.getElementById('tab-lessons');
   const tabResources = document.getElementById('tab-resources');
+  const tabCourseSummary = document.getElementById('tab-course-summary');
+  
   const listLessons = document.getElementById('course-outline-list');
   const listResources = document.getElementById('course-resources-list');
+  const listSummaryInfo = document.getElementById('course-summary-sidebar-info');
   const searchInput = document.getElementById('outline-search');
 
   if (searchInput) searchInput.value = '';
 
-  if (tabName === 'lessons') {
-    if (tabLessons) tabLessons.classList.add('active');
-    if (tabResources) tabResources.classList.remove('active');
-    if (listLessons) listLessons.style.display = 'block';
-    if (listResources) listResources.style.display = 'none';
-    if (searchInput) searchInput.placeholder = 'Search lectures...';
-  } else {
-    if (tabLessons) tabLessons.classList.remove('active');
-    if (tabResources) tabResources.classList.add('active');
-    if (listLessons) listLessons.style.display = 'none';
-    if (listResources) listResources.style.display = 'block';
-    if (searchInput) searchInput.placeholder = 'Search resources...';
+  // Toggle outline sidebar scroll lists
+  if (listLessons) listLessons.style.display = tabName === 'lessons' ? 'block' : 'none';
+  if (listResources) listResources.style.display = tabName === 'resources' ? 'block' : 'none';
+  if (listSummaryInfo) listSummaryInfo.style.display = tabName === 'course-summary' ? 'block' : 'none';
+
+  // Toggle active tab buttons styling
+  if (tabLessons) {
+    if (tabName === 'lessons') tabLessons.classList.add('active');
+    else tabLessons.classList.remove('active');
+  }
+  if (tabResources) {
+    if (tabName === 'resources') tabResources.classList.add('active');
+    else tabResources.classList.remove('active');
+  }
+  if (tabCourseSummary) {
+    if (tabName === 'course-summary') tabCourseSummary.classList.add('active');
+    else tabCourseSummary.classList.remove('active');
   }
 
-  renderActiveWorkspaceOutline();
+  // Toggle outline search visibility / text
+  if (searchInput) {
+    if (tabName === 'lessons') {
+      searchInput.style.display = 'block';
+      searchInput.placeholder = 'Search lectures...';
+    } else if (tabName === 'resources') {
+      searchInput.style.display = 'block';
+      searchInput.placeholder = 'Search resources...';
+    } else {
+      searchInput.style.display = 'none';
+    }
+  }
+
+  if (tabName === 'course-summary') {
+    // Clear playback tracking intervals/overrides
+    if (state.progressSaveInterval) {
+      clearInterval(state.progressSaveInterval);
+      state.progressSaveInterval = null;
+    }
+    const video = document.getElementById('main-video-player');
+    if (video && !video.paused) {
+      video.pause();
+    }
+    cancelAutoplay();
+
+    // Show course summary in the main viewer panel
+    showViewerPanel('course-summary');
+    
+    // Set breadcrumbs
+    document.getElementById('crumb-section').textContent = state.currentCourse.title;
+    document.getElementById('crumb-item').textContent = 'Course Summary';
+    document.getElementById('crumb-item').classList.add('active');
+    document.getElementById('file-actions-bar').style.display = 'none';
+
+    loadCourseSummary();
+  } else {
+    renderActiveWorkspaceOutline();
+    
+    // If the outline tab was switched, and there was an active lesson selected, restore its display
+    if (state.currentItem) {
+      document.getElementById('file-actions-bar').style.display = 'flex';
+      showViewerPanel(state.currentItem.type);
+      document.getElementById('crumb-section').textContent = state.currentSection.name;
+      document.getElementById('crumb-item').textContent = state.currentItem.name;
+      document.getElementById('crumb-item').classList.add('active');
+    } else {
+      showViewerPanel('blank');
+      document.getElementById('file-actions-bar').style.display = 'none';
+      document.getElementById('crumb-section').textContent = state.currentCourse.title;
+      document.getElementById('crumb-item').textContent = '';
+      document.getElementById('crumb-item').classList.remove('active');
+    }
+  }
 }
 
 function renderActiveWorkspaceOutline() {
@@ -833,6 +947,12 @@ function selectItem(item, section = null) {
     state.progressSaveInterval = null;
   }
   cancelAutoplay();
+
+  // Pause video player if it exists and is playing
+  const mainVideo = document.getElementById('main-video-player');
+  if (mainVideo && !mainVideo.paused) {
+    mainVideo.pause();
+  }
 
   state.currentItem = item;
   localStorage.setItem('current-item-path', item.path);
@@ -888,6 +1008,29 @@ function selectItem(item, section = null) {
     document.getElementById('other-file-name').textContent = item.name;
     document.getElementById('other-file-ext').textContent = item.extension;
   }
+
+  // AI sidebar support for eligible types (video, html, text, code)
+  const eligibleTypes = ['video', 'html', 'text', 'code'];
+  const btnToggleSidebar = document.getElementById('btn-toggle-ai-sidebar');
+  const extraSidebar = document.getElementById('video-extra-sidebar');
+
+  if (eligibleTypes.includes(item.type)) {
+    if (btnToggleSidebar) btnToggleSidebar.style.display = 'flex';
+    if (extraSidebar) {
+      const isCollapsed = localStorage.getItem('video-extra-sidebar-collapsed') !== 'false';
+      if (isCollapsed) {
+        extraSidebar.classList.add('collapsed');
+      } else {
+        extraSidebar.classList.remove('collapsed');
+      }
+    }
+    loadVideoMetadata(item);
+  } else {
+    if (btnToggleSidebar) btnToggleSidebar.style.display = 'none';
+    if (extraSidebar) {
+      extraSidebar.classList.add('collapsed');
+    }
+  }
 }
 
 // Toggle visible containers inside viewport
@@ -900,7 +1043,8 @@ function showViewerPanel(type) {
     text: 'viewer-text-container',
     image: 'viewer-image-container',
     code: 'viewer-text-container',
-    other: 'viewer-other-container'
+    other: 'viewer-other-container',
+    'course-summary': 'viewer-course-summary-container'
   };
 
   const targetPanelId = panels[type];
@@ -974,8 +1118,12 @@ function initVideoPlayerEvents() {
     video.playbackRate = state.playbackRate;
     document.getElementById('video-speed-btn').textContent = `${state.playbackRate.toFixed(2)}x`;
 
-    // Seek to last currentTime position
-    if (state.currentItem && state.currentItem.progress && state.currentItem.progress.currentTime) {
+    // Seek to target or last currentTime position
+    if (state.pendingSeekTime !== undefined && state.pendingSeekTime !== null) {
+      video.currentTime = state.pendingSeekTime;
+      state.pendingSeekTime = null;
+      video.play().catch(e => console.log("Play failed:", e));
+    } else if (state.currentItem && state.currentItem.progress && state.currentItem.progress.currentTime) {
       video.currentTime = state.currentItem.progress.currentTime;
     }
   });
@@ -1028,20 +1176,6 @@ function loadVideoPlayer(item) {
 
   video.load();
   video.play().catch(e => console.log("Autoplay blocked by browser. User gesture required."));
-
-  // Restore sidebar state
-  const extraSidebar = document.getElementById('video-extra-sidebar');
-  if (extraSidebar) {
-    const isCollapsed = localStorage.getItem('video-extra-sidebar-collapsed') !== 'false';
-    if (isCollapsed) {
-      extraSidebar.classList.add('collapsed');
-    } else {
-      extraSidebar.classList.remove('collapsed');
-    }
-  }
-
-  // Load transcript and summary metadata
-  loadVideoMetadata(item);
 }
 
 function togglePlay() {
@@ -1362,16 +1496,56 @@ function recomputeTotalProgress() {
 // --- TEXT / DOCUMENT VIEWER LOGIC ---
 async function loadTextViewer(item) {
   const textPre = document.getElementById('text-pre-content');
-  textPre.textContent = 'Loading text document...';
+  const textMarkdown = document.getElementById('text-markdown-content');
+
+  if (textPre) {
+    textPre.style.display = 'none';
+    textPre.textContent = 'Loading content...';
+  }
+  if (textMarkdown) {
+    textMarkdown.style.display = 'none';
+    textMarkdown.innerHTML = '';
+  }
 
   try {
     const res = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`);
     const txt = await res.text();
-    textPre.textContent = txt;
+    
+    const ext = item.name.split('.').pop().toLowerCase();
+    
+    if (ext === 'md') {
+      if (textMarkdown) {
+        textMarkdown.innerHTML = parseMarkdown(txt);
+        processAlerts(textMarkdown);
+        if (typeof Prism !== 'undefined') {
+          Prism.highlightAllUnder(textMarkdown);
+        }
+        textMarkdown.style.display = 'block';
+      }
+    } else if (item.type === 'code' || CODE_EXTENSIONS_MAP[ext]) {
+      if (textPre) {
+        const lang = CODE_EXTENSIONS_MAP[ext] || 'clike';
+        textPre.innerHTML = `<code class="language-${lang}"></code>`;
+        textPre.querySelector('code').textContent = txt;
+        if (typeof Prism !== 'undefined') {
+          Prism.highlightAllUnder(textPre);
+        }
+        textPre.style.display = 'block';
+      }
+    } else {
+      if (textPre) {
+        textPre.textContent = txt;
+        textPre.style.display = 'block';
+      }
+    }
+    
     saveItemStarted(item);
   } catch (err) {
     console.error(err);
-    textPre.textContent = 'Failed to load text file.';
+    if (textPre) {
+      textPre.textContent = 'Failed to load document.';
+      textPre.style.display = 'block';
+    }
   }
 }
 
@@ -1915,21 +2089,33 @@ function toggleExtraSidebar() {
 function switchVideoExtraTab(tabName) {
   const btnTranscript = document.getElementById('btn-tab-transcript');
   const btnSummary = document.getElementById('btn-tab-summary');
+  const btnChat = document.getElementById('btn-tab-chat');
   const paneTranscript = document.getElementById('pane-transcript');
   const paneSummary = document.getElementById('pane-summary');
+  const paneChat = document.getElementById('pane-chat');
   
-  if (!btnTranscript || !btnSummary || !paneTranscript || !paneSummary) return;
+  if (!btnTranscript || !btnSummary || !btnChat || !paneTranscript || !paneSummary || !paneChat) return;
+  
+  btnTranscript.classList.remove('active');
+  btnSummary.classList.remove('active');
+  btnChat.classList.remove('active');
+  
+  paneTranscript.classList.remove('active');
+  paneSummary.classList.remove('active');
+  paneChat.classList.remove('active');
   
   if (tabName === 'transcript') {
     btnTranscript.classList.add('active');
-    btnSummary.classList.remove('active');
     paneTranscript.classList.add('active');
-    paneSummary.classList.remove('active');
   } else if (tabName === 'summary') {
     btnSummary.classList.add('active');
-    btnTranscript.classList.remove('active');
     paneSummary.classList.add('active');
-    paneTranscript.classList.remove('active');
+  } else if (tabName === 'chat') {
+    btnChat.classList.add('active');
+    paneChat.classList.add('active');
+    // Scroll chat to bottom when switching to it
+    const messagesBody = document.getElementById('chat-messages-body');
+    if (messagesBody) messagesBody.scrollTop = messagesBody.scrollHeight;
   }
 }
 
@@ -1938,8 +2124,17 @@ async function loadVideoMetadata(item) {
   const summaryBody = document.getElementById('summary-body');
   if (!transcriptBody || !summaryBody) return;
   
-  transcriptBody.innerHTML = '<p class="empty-pane-msg">Checking for transcript...</p>';
+  const isVideo = item.type === 'video';
+  transcriptBody.innerHTML = `<p class="empty-pane-msg">Checking for ${isVideo ? 'transcript' : 'extracted text'}...</p>`;
   summaryBody.innerHTML = '<p class="empty-pane-msg">Checking for summary...</p>';
+  
+  // Reset chat state for the new item
+  state.chatHistory = [];
+  const chatInput = document.getElementById('chat-user-input');
+  if (chatInput) {
+    chatInput.placeholder = isVideo ? 'Ask a question about this lecture...' : 'Ask a question about this document...';
+  }
+  renderChatMessages();
   
   try {
     const res = await fetch(`${API_BASE}/api/video/metadata?path=${encodeURIComponent(item.path)}`);
@@ -1949,24 +2144,31 @@ async function loadVideoMetadata(item) {
     if (data.hasTranscript && data.transcript.trim()) {
       transcriptBody.textContent = data.transcript;
     } else {
-      transcriptBody.innerHTML = '<p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>';
+      transcriptBody.innerHTML = isVideo
+        ? '<p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>'
+        : '<p class="empty-pane-msg">No text content extracted. Click the button above to extract text and generate a summary.</p>';
     }
     
     if (data.hasSummary && data.summary.trim()) {
       summaryBody.innerHTML = parseMarkdown(data.summary);
+      processAlerts(summaryBody);
+      if (typeof Prism !== 'undefined') {
+        Prism.highlightAllUnder(summaryBody);
+      }
     } else {
       summaryBody.innerHTML = '<p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>';
     }
   } catch (err) {
     console.error('Error loading video metadata:', err);
-    transcriptBody.innerHTML = '<p class="empty-pane-msg">Error loading transcript.</p>';
+    transcriptBody.innerHTML = `<p class="empty-pane-msg">Error loading ${isVideo ? 'transcript' : 'extracted text'}.</p>`;
     summaryBody.innerHTML = '<p class="empty-pane-msg">Error loading summary.</p>';
   }
 }
 
 async function generateTranscriptAndSummaryAction() {
-  if (!state.currentItem || state.currentItem.type !== 'video') {
-    showToast('No active video loaded.');
+  const eligibleTypes = ['video', 'html', 'text', 'code'];
+  if (!state.currentItem || !eligibleTypes.includes(state.currentItem.type)) {
+    showToast('No active video or document loaded.');
     return;
   }
   
@@ -1976,16 +2178,25 @@ async function generateTranscriptAndSummaryAction() {
   
   if (!genBtn || !spinner) return;
   
+  const isVideo = state.currentItem.type === 'video';
+  
   // Check settings configuration first
-  if (!state.gcpConfig || !state.gcpConfig.projectId || !state.gcpConfig.bucketName) {
-    showToast('Please configure GCP Settings first!');
+  if (!state.gcpConfig || !state.gcpConfig.projectId || (isVideo && !state.gcpConfig.bucketName)) {
+    const missingSetting = !state.gcpConfig || !state.gcpConfig.projectId
+      ? 'GCP Project ID'
+      : 'GCS Bucket Name';
+    showToast(`Please configure ${missingSetting} in Settings first!`);
     switchView('settings');
     return;
   }
   
   genBtn.style.display = 'none';
   spinner.style.display = 'flex';
-  if (statusSpan) statusSpan.textContent = 'Transcribing audio (takes a moment)...';
+  if (statusSpan) {
+    statusSpan.textContent = isVideo
+      ? 'Transcribing audio (takes a moment)...'
+      : 'Extracting text and generating summary...';
+  }
   
   try {
     const res = await fetch(`${API_BASE}/api/video/generate-transcript`, {
@@ -2013,8 +2224,103 @@ async function generateTranscriptAndSummaryAction() {
   }
 }
 
+const CODE_EXTENSIONS_MAP = {
+  js: 'javascript',
+  jsx: 'jsx',
+  ts: 'typescript',
+  tsx: 'tsx',
+  py: 'python',
+  sh: 'bash',
+  bash: 'bash',
+  json: 'json',
+  css: 'css',
+  go: 'go',
+  rs: 'rust',
+  rust: 'rust',
+  java: 'java',
+  cpp: 'cpp',
+  c: 'c',
+  h: 'c',
+  yaml: 'yaml',
+  yml: 'yaml',
+  xml: 'xml',
+  sql: 'sql',
+  ini: 'ini',
+  conf: 'ini',
+  html: 'markup',
+  htm: 'markup',
+  md: 'markdown'
+};
+
+function processAlerts(containerEl) {
+  if (!containerEl) return;
+  const blockquotes = containerEl.querySelectorAll('blockquote');
+  blockquotes.forEach(bq => {
+    const paragraphs = bq.querySelectorAll('p');
+    if (paragraphs.length === 0) return;
+    
+    const firstP = paragraphs[0];
+    const htmlText = firstP.innerHTML.trim();
+    
+    const match = htmlText.match(/^\[!(NOTE|IMPORTANT|WARNING|TIP|CAUTION)\](?:\s|<br>|\n)?([\s\S]*)$/i);
+    if (match) {
+      const type = match[1].toUpperCase();
+      const content = match[2];
+      
+      bq.className = `callout-block callout-${type.toLowerCase()}`;
+      firstP.innerHTML = content.trim();
+      
+      const header = document.createElement('div');
+      header.className = 'callout-header';
+      header.innerHTML = `${getCalloutIcon(type)}<span class="callout-title">${getCalloutLabel(type)}</span>`;
+      bq.insertBefore(header, bq.firstChild);
+    }
+  });
+}
+
+function getCalloutIcon(type) {
+  switch (type) {
+    case 'NOTE':
+      return `<svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+    case 'TIP':
+      return `<svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M15.09 14c.18-.19.33-.42.49-.67a6 6 0 1 0-7.18 0c.16.25.31.48.49.67a5 5 0 0 1 1.09 3.19h4a5 5 0 0 1 1.12-3.19z"/></svg>`;
+    case 'IMPORTANT':
+      return `<svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+    case 'WARNING':
+      return `<svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+    case 'CAUTION':
+      return `<svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+    default:
+      return '';
+  }
+}
+
+function getCalloutLabel(type) {
+  switch (type) {
+    case 'NOTE':
+      return 'Note';
+    case 'TIP':
+      return 'Tip';
+    case 'IMPORTANT':
+      return 'Important';
+    case 'WARNING':
+      return 'Warning';
+    case 'CAUTION':
+      return 'Caution';
+    default:
+      return type;
+  }
+}
+
 function parseMarkdown(md) {
   if (!md) return '';
+  if (typeof marked !== 'undefined' && marked.parse) {
+    try {
+      return marked.parse(md, { gfm: true, breaks: true });
+    } catch (err) {
+      console.error('Marked rendering error:', err);
+    }
+  }
   
   let html = md;
   // Escape HTML tags to prevent XSS
@@ -2022,6 +2328,9 @@ function parseMarkdown(md) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+  
+  // Parse Markdown links: [text](url) -> <a href="url">text</a>
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
   
   // Headers
   html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
@@ -2071,4 +2380,598 @@ function parseMarkdown(md) {
   
   return processedLines.join('\n');
 }
+
+// --- COURSE SUMMARY FRONTEND LOGIC ---
+let courseSummaryPollInterval = null;
+
+window.toggleSummaryScopeCard = function() {
+  const card = document.getElementById('summary-scope-card');
+  if (card) card.classList.toggle('collapsed');
+};
+
+window.setScopePreset = function(preset) {
+  const checkboxes = document.querySelectorAll('.scope-checkbox[data-path]');
+  checkboxes.forEach(cb => {
+    const type = cb.getAttribute('data-type');
+    const isVideo = type === 'video';
+    const isDoc = type === 'document';
+    let check = false;
+    if (preset === 'all') check = true;
+    else if (preset === 'none') check = false;
+    else if (preset === 'videos') check = isVideo;
+    else if (preset === 'documents') check = isDoc;
+    
+    if (check) {
+      cb.classList.add('checked');
+    } else {
+      cb.classList.remove('checked');
+    }
+  });
+
+  updateSectionCheckboxes();
+};
+
+window.toggleScopeItemCheckbox = function(checkboxId) {
+  const cb = document.getElementById(checkboxId);
+  if (cb) cb.classList.toggle('checked');
+  updateSectionCheckboxes();
+};
+
+window.toggleSectionCheckbox = function(secIdx) {
+  const secCb = document.getElementById(`scope-section-cb-${secIdx}`);
+  if (!secCb) return;
+
+  const isChecking = !secCb.classList.contains('checked');
+  if (isChecking) {
+    secCb.classList.add('checked');
+  } else {
+    secCb.classList.remove('checked');
+  }
+
+  const fileCbs = document.querySelectorAll(`[id^="scope-item-cb-${secIdx}-"]`);
+  fileCbs.forEach(cb => {
+    if (isChecking) {
+      cb.classList.add('checked');
+    } else {
+      cb.classList.remove('checked');
+    }
+  });
+};
+
+function updateSectionCheckboxes() {
+  if (!state.currentCourse) return;
+  state.currentCourse.sections.forEach((sec, secIdx) => {
+    const secCb = document.getElementById(`scope-section-cb-${secIdx}`);
+    if (!secCb) return;
+
+    const fileCbs = document.querySelectorAll(`[id^="scope-item-cb-${secIdx}-"]`);
+    if (fileCbs.length === 0) return;
+
+    let allChecked = true;
+    fileCbs.forEach(cb => {
+      if (!cb.classList.contains('checked')) {
+        allChecked = false;
+      }
+    });
+
+    if (allChecked) {
+      secCb.classList.add('checked');
+    } else {
+      secCb.classList.remove('checked');
+    }
+  });
+}
+
+function renderSummaryScopeSelector() {
+  const card = document.getElementById('summary-scope-card');
+  const listContainer = document.getElementById('summary-scope-files-list');
+  if (!card || !listContainer || !state.currentCourse) return;
+
+  listContainer.innerHTML = '';
+  let count = 0;
+
+  state.currentCourse.sections.forEach((sec, secIdx) => {
+    const eligibleItems = sec.items.filter(item => {
+      const ext = item.name.split('.').pop().toLowerCase();
+      return item.type === 'video' ||
+             (item.type === 'text' && (ext === 'md' || ext === 'txt')) ||
+             (item.type === 'html' && (ext === 'html' || ext === 'htm'));
+    });
+
+    if (eligibleItems.length === 0) return;
+
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'scope-section-group';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'scope-section-title-row';
+    titleRow.onclick = () => window.toggleSectionCheckbox(secIdx);
+
+    const secCheckbox = document.createElement('div');
+    secCheckbox.className = 'scope-checkbox checked';
+    secCheckbox.id = `scope-section-cb-${secIdx}`;
+    secCheckbox.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width: 10px; height: 10px; display: block; color: #0d0e1b;"><polyline points="20 6 9 17 4 12"/></svg>`;
+    titleRow.appendChild(secCheckbox);
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'scope-section-title';
+    titleSpan.textContent = sec.name;
+    titleRow.appendChild(titleSpan);
+
+    groupDiv.appendChild(titleRow);
+
+    eligibleItems.forEach((item, itemIdx) => {
+      const rowId = `scope-item-cb-${secIdx}-${itemIdx}`;
+      const isVideo = item.type === 'video';
+      const fileIconSvg = isVideo 
+        ? `<svg class="scope-file-icon video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 14px; height: 14px; margin-right: 4px;"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`
+        : `<svg class="scope-file-icon document" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 14px; height: 14px; margin-right: 4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+
+      const row = document.createElement('div');
+      row.className = 'scope-item-row';
+      row.onclick = () => window.toggleScopeItemCheckbox(rowId);
+
+      const checkbox = document.createElement('div');
+      checkbox.className = 'scope-checkbox checked';
+      checkbox.id = rowId;
+      checkbox.setAttribute('data-path', item.path);
+      checkbox.setAttribute('data-type', isVideo ? 'video' : 'document');
+      checkbox.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width: 10px; height: 10px; display: block; color: #0d0e1b;"><polyline points="20 6 9 17 4 12"/></svg>`;
+
+      const label = document.createElement('span');
+      label.className = 'scope-file-name';
+      label.textContent = item.name;
+
+      row.appendChild(checkbox);
+      
+      const tempSpan = document.createElement('span');
+      tempSpan.innerHTML = fileIconSvg;
+      row.appendChild(tempSpan.firstElementChild);
+      
+      row.appendChild(label);
+      groupDiv.appendChild(row);
+      count++;
+    });
+
+    listContainer.appendChild(groupDiv);
+  });
+
+  if (count > 0) {
+    card.style.display = 'block';
+  } else {
+    card.style.display = 'none';
+  }
+  
+  updateSectionCheckboxes();
+}
+
+async function loadCourseSummary() {
+  if (!state.currentCourse) return;
+  
+  const contentArea = document.getElementById('course-summary-content');
+  const progressContainer = document.getElementById('course-summary-progress-container');
+  const genBtn = document.getElementById('btn-generate-course-summary');
+  const toggleBtn = document.getElementById('btn-toggle-course-chat');
+  
+  if (!contentArea || !progressContainer || !genBtn) return;
+  if (toggleBtn) toggleBtn.style.display = 'flex';
+  
+  // Clear any existing polling loop
+  if (courseSummaryPollInterval) {
+    clearInterval(courseSummaryPollInterval);
+    courseSummaryPollInterval = null;
+  }
+  
+  contentArea.innerHTML = '<p class="empty-pane-msg" style="text-align: center; padding: 40px 0;">Loading course summary status...</p>';
+  progressContainer.style.display = 'none';
+  genBtn.style.display = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/course/summary-status?courseId=${encodeURIComponent(state.currentCourse.id)}`);
+    if (!res.ok) throw new Error('Failed to load course summary status');
+    
+    const data = await res.json();
+    
+    // Render the file checklist
+    renderSummaryScopeSelector();
+    const card = document.getElementById('summary-scope-card');
+    
+    if (data.status === 'processing') {
+      showCourseSummaryProgress(data);
+      startPollingCourseSummary();
+      if (card) card.style.display = 'none';
+    } else if (data.status === 'completed' || data.hasSummary) {
+      if (data.summary) {
+        contentArea.innerHTML = parseMarkdown(data.summary);
+        processAlerts(contentArea);
+        if (typeof Prism !== 'undefined') {
+          Prism.highlightAllUnder(contentArea);
+        }
+      } else {
+        contentArea.innerHTML = '<p class="empty-pane-msg" style="text-align: center; padding: 40px 0;">Summary file found, but content is empty.</p>';
+      }
+      genBtn.textContent = 'Regenerate Summary';
+      if (card) card.classList.add('collapsed');
+    } else if (data.status === 'failed') {
+      contentArea.innerHTML = `
+        <div class="empty-pane-msg" style="text-align: center; padding: 40px 0; color: var(--color-danger);">
+          <p>Previous generation failed: ${data.error || 'Unknown error'}</p>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Click below to retry.</p>
+        </div>
+      `;
+      genBtn.textContent = 'Generate Course Summary';
+      if (card) card.classList.remove('collapsed');
+    } else {
+      contentArea.innerHTML = '<p class="empty-pane-msg" style="text-align: center; padding: 40px 0;">No course-level summary generated yet. Click "Generate Course Summary" to analyze all lessons and extract key takeaways.</p>';
+      genBtn.textContent = 'Generate Course Summary';
+      if (card) card.classList.remove('collapsed');
+    }
+  } catch (err) {
+    console.error('Error fetching course summary status:', err);
+    contentArea.innerHTML = '<p class="empty-pane-msg" style="text-align: center; padding: 40px 0; color: var(--color-danger);">Error checking course summary status.</p>';
+  }
+}
+
+function showCourseSummaryProgress(data) {
+  const progressContainer = document.getElementById('course-summary-progress-container');
+  const statusText = document.getElementById('course-summary-status-text');
+  const progressBar = document.getElementById('course-summary-progress-bar');
+  const logArea = document.getElementById('course-summary-log');
+  const genBtn = document.getElementById('btn-generate-course-summary');
+  const contentArea = document.getElementById('course-summary-content');
+
+  if (!progressContainer || !statusText || !progressBar || !logArea || !genBtn || !contentArea) return;
+
+  progressContainer.style.display = 'flex';
+  genBtn.style.display = 'none';
+  contentArea.innerHTML = '<p class="empty-pane-msg" style="text-align: center; padding: 40px 0;">Analyzing course contents... Keep this tab open to monitor progress.</p>';
+
+  statusText.textContent = data.progress || 'Processing...';
+  progressBar.style.width = `${data.percent || 0}%`;
+  
+  if (data.logs) {
+    logArea.textContent = data.logs;
+    logArea.scrollTop = logArea.scrollHeight;
+  }
+}
+
+async function generateCourseSummaryAction() {
+  if (!state.currentCourse) return;
+
+  if (!state.gcpConfig || !state.gcpConfig.projectId) {
+    showToast('Please configure at least a GCP Project ID in Settings first!');
+    switchView('settings');
+    return;
+  }
+
+  // Get checked file paths
+  const checkedBoxes = document.querySelectorAll('#summary-scope-files-list .scope-checkbox.checked[data-path]');
+  const selectedFiles = Array.from(checkedBoxes).map(cb => cb.getAttribute('data-path'));
+
+  if (selectedFiles.length === 0) {
+    showToast('Please select at least one file to summarize.');
+    return;
+  }
+
+  const genBtn = document.getElementById('btn-generate-course-summary');
+  if (genBtn) genBtn.style.display = 'none';
+
+  const card = document.getElementById('summary-scope-card');
+  if (card) card.style.display = 'none';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/course/generate-summary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        courseId: state.currentCourse.id,
+        selectedFiles: selectedFiles
+      })
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Failed to start summary generation');
+    }
+
+    const data = await res.json();
+    showCourseSummaryProgress(data);
+    startPollingCourseSummary();
+    showToast('Course summary generation started.');
+  } catch (err) {
+    console.error('Failed to start course summary:', err);
+    showToast(err.message || 'Error starting course summary generation');
+    if (genBtn) genBtn.style.display = '';
+    if (card) card.style.display = 'block';
+  }
+}
+
+function startPollingCourseSummary() {
+  if (courseSummaryPollInterval) clearInterval(courseSummaryPollInterval);
+
+  courseSummaryPollInterval = setInterval(async () => {
+    if (!state.currentCourse || state.currentWorkspaceTab !== 'course-summary') {
+      clearInterval(courseSummaryPollInterval);
+      courseSummaryPollInterval = null;
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/course/summary-status?courseId=${encodeURIComponent(state.currentCourse.id)}`);
+      if (!res.ok) throw new Error('Polling status failed');
+
+      const data = await res.json();
+      showCourseSummaryProgress(data);
+
+      if (data.status === 'completed') {
+        clearInterval(courseSummaryPollInterval);
+        courseSummaryPollInterval = null;
+        showToast('Course summary generated successfully!');
+        await loadCourseSummary();
+      } else if (data.status === 'failed') {
+        clearInterval(courseSummaryPollInterval);
+        courseSummaryPollInterval = null;
+        showToast('Course summary generation failed!');
+        await loadCourseSummary();
+      }
+    } catch (err) {
+      console.error('Error polling course summary status:', err);
+    }
+  }, 1500);
+}
+
+// --- CHAT WITH TRANSCRIPT FRONTEND LOGIC ---
+function renderChatMessages() {
+  const messagesBody = document.getElementById('chat-messages-body');
+  const suggestionsList = document.getElementById('chat-suggestions-list');
+  if (!messagesBody) return;
+
+  if (state.chatHistory.length === 0) {
+    const isVideo = state.currentItem && state.currentItem.type === 'video';
+    messagesBody.innerHTML = isVideo
+      ? '<p class="empty-pane-msg">Ask questions about this lecture\'s transcript. Start by typing a question below or selecting a suggestion.</p>'
+      : '<p class="empty-pane-msg">Ask questions about this document\'s content. Start by typing a question below or selecting a suggestion.</p>';
+    if (suggestionsList) suggestionsList.style.display = 'flex';
+    return;
+  }
+
+  if (suggestionsList) suggestionsList.style.display = 'none';
+  
+  messagesBody.innerHTML = state.chatHistory.map(msg => {
+    const isUser = msg.role === 'user';
+    const parsedContent = isUser ? escapeHtml(msg.content) : parseMarkdown(msg.content);
+    return `
+      <div class="chat-message ${isUser ? 'user' : 'assistant'}">
+        ${parsedContent}
+      </div>
+    `;
+  }).join('');
+
+  messagesBody.scrollTop = messagesBody.scrollHeight;
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+async function sendChatMessage() {
+  const inputEl = document.getElementById('chat-user-input');
+  if (!inputEl) return;
+  const messageText = inputEl.value.trim();
+  if (!messageText) return;
+
+  await executeChatMessage(messageText);
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+}
+
+async function sendQuickQuestion(text) {
+  await executeChatMessage(text);
+}
+
+function handleChatInputKeyDown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendChatMessage();
+  }
+}
+
+async function executeChatMessage(messageText) {
+  const eligibleTypes = ['video', 'html', 'text', 'code'];
+  if (!state.currentItem || !eligibleTypes.includes(state.currentItem.type)) {
+    showToast('No active video or document loaded.');
+    return;
+  }
+
+  // Push user message
+  state.chatHistory.push({ role: 'user', content: messageText });
+  renderChatMessages();
+
+  // Show typing indicator
+  const messagesBody = document.getElementById('chat-messages-body');
+  const indicator = document.createElement('div');
+  indicator.className = 'typing-indicator';
+  indicator.id = 'chat-typing-indicator';
+  indicator.innerHTML = `
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+  `;
+  messagesBody.appendChild(indicator);
+  messagesBody.scrollTop = messagesBody.scrollHeight;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/video/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: state.currentItem.path,
+        message: messageText,
+        history: state.chatHistory.slice(0, -1)
+      })
+    });
+
+    const indicatorEl = document.getElementById('chat-typing-indicator');
+    if (indicatorEl) indicatorEl.remove();
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Failed to get AI response');
+    }
+
+    const data = await res.json();
+    state.chatHistory.push({ role: 'model', content: data.response });
+    renderChatMessages();
+  } catch (err) {
+    console.error('Chat failed:', err);
+    const indicatorEl = document.getElementById('chat-typing-indicator');
+    if (indicatorEl) indicatorEl.remove();
+
+    state.chatHistory.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
+    renderChatMessages();
+    
+    const lastMsgEl = messagesBody.lastElementChild;
+    if (lastMsgEl) lastMsgEl.classList.add('error');
+  }
+}
+
+// Bind to window for HTML accessibility
+window.sendQuickQuestion = sendQuickQuestion;
+window.handleChatInputKeyDown = handleChatInputKeyDown;
+window.sendChatMessage = sendChatMessage;
+window.renderChatMessages = renderChatMessages;
+
+// --- COURSE-WIDE CHAT FRONTEND LOGIC ---
+function toggleCourseChat() {
+  const panel = document.getElementById('course-chat-panel');
+  if (!panel) return;
+  
+  if (panel.style.display === 'none' || !panel.style.display) {
+    panel.style.display = 'flex';
+    // Scroll messages to bottom when opening
+    const messagesBody = document.getElementById('course-chat-messages-body');
+    if (messagesBody) messagesBody.scrollTop = messagesBody.scrollHeight;
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+function renderCourseChatMessages() {
+  const messagesBody = document.getElementById('course-chat-messages-body');
+  const suggestionsList = document.getElementById('course-chat-suggestions-list');
+  if (!messagesBody) return;
+
+  if (state.courseChatHistory.length === 0) {
+    messagesBody.innerHTML = '<p class="empty-pane-msg">Ask any question about the entire course content, summaries, or cross-topic relationships.</p>';
+    if (suggestionsList) suggestionsList.style.display = 'flex';
+    return;
+  }
+
+  if (suggestionsList) suggestionsList.style.display = 'none';
+  
+  messagesBody.innerHTML = state.courseChatHistory.map(msg => {
+    const isUser = msg.role === 'user';
+    const parsedContent = isUser ? escapeHtml(msg.content) : parseMarkdown(msg.content);
+    return `
+      <div class="chat-message ${isUser ? 'user' : 'assistant'}">
+        ${parsedContent}
+      </div>
+    `;
+  }).join('');
+
+  messagesBody.scrollTop = messagesBody.scrollHeight;
+}
+
+async function sendCourseChatMessage() {
+  const inputEl = document.getElementById('course-chat-user-input');
+  if (!inputEl) return;
+  const messageText = inputEl.value.trim();
+  if (!messageText) return;
+
+  await executeCourseChatMessage(messageText);
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+}
+
+async function sendCourseQuickQuestion(text) {
+  await executeCourseChatMessage(text);
+}
+
+function handleCourseChatInputKeyDown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendCourseChatMessage();
+  }
+}
+
+async function executeCourseChatMessage(messageText) {
+  if (!state.currentCourse) {
+    showToast('No active course loaded.');
+    return;
+  }
+
+  // Push user message
+  state.courseChatHistory.push({ role: 'user', content: messageText });
+  renderCourseChatMessages();
+
+  // Show typing indicator
+  const messagesBody = document.getElementById('course-chat-messages-body');
+  const indicator = document.createElement('div');
+  indicator.className = 'typing-indicator';
+  indicator.id = 'course-chat-typing-indicator';
+  indicator.innerHTML = `
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+  `;
+  messagesBody.appendChild(indicator);
+  messagesBody.scrollTop = messagesBody.scrollHeight;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/course/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        courseId: state.currentCourse.id,
+        message: messageText,
+        history: state.courseChatHistory.slice(0, -1)
+      })
+    });
+
+    const indicatorEl = document.getElementById('course-chat-typing-indicator');
+    if (indicatorEl) indicatorEl.remove();
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Failed to get AI response');
+    }
+
+    const data = await res.json();
+    state.courseChatHistory.push({ role: 'model', content: data.response });
+    renderCourseChatMessages();
+  } catch (err) {
+    console.error('Course chat failed:', err);
+    const indicatorEl = document.getElementById('course-chat-typing-indicator');
+    if (indicatorEl) indicatorEl.remove();
+
+    state.courseChatHistory.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
+    renderCourseChatMessages();
+    
+    const lastMsgEl = messagesBody.lastElementChild;
+    if (lastMsgEl) lastMsgEl.classList.add('error');
+  }
+}
+
+// Bind to window for HTML accessibility
+window.toggleCourseChat = toggleCourseChat;
+window.sendCourseQuickQuestion = sendCourseQuickQuestion;
+window.handleCourseChatInputKeyDown = handleCourseChatInputKeyDown;
+window.sendCourseChatMessage = sendCourseChatMessage;
+window.renderCourseChatMessages = renderCourseChatMessages;
 
