@@ -1,0 +1,10 @@
+# Cline Rules
+
+Welcome, Agent! Please follow the instructions below when working on this codebase.
+
+1. **Read Project Context**: First, read [ai.md](file:///Users/maulik/Documents/GitHub/course-viewer/ai.md) to understand the project architecture, file directory, local DB schema (`db.json`), backend Express endpoints, and frontend SPA setup.
+2. **Local Run**: The project can be started locally using `npm run dev` or `npm start` (port 3005). PM2 setup is also supported via `npm run pm2:start`.
+3. **Coding Standards**:
+   - Keep comments and docstrings intact.
+   - Use Vanilla CSS for all UI styling (follow the glassmorphic design system in `public/style.css`).
+   - Do not split files unless explicitly instructed.

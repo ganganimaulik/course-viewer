@@ -1,0 +1,12 @@
+---
+description: "General instructions for working on the Course Viewer & Tracker project"
+globs: ["*"]
+alwaysApply: true
+---
+# Course Viewer & Tracker Rules
+
+Please read the instructions in [ai.md](file:///Users/maulik/Documents/GitHub/course-viewer/ai.md) before making edits or answering questions about this project.
+
+- **Tech Stack**: Express.js (backend, port 3005), Vanilla JS SPA, CSS, and HTML5 (frontend).
+- **DB**: Local JSON file `db.json` (progress and directories list).
+- **Guidelines**: Preserve comments, use Vanilla CSS matching the glassmorphic design system, and keep dependencies standard.

@@ -1,0 +1,10 @@
+# Windsurf Rules
+
+Welcome, Windsurf Agent! Please follow the instructions below when working on this codebase.
+
+1. **Read Project Context**: Read [ai.md](file:///Users/maulik/Documents/GitHub/course-viewer/ai.md) to understand the project architecture, database schema, Express.js API endpoints, and SPA UI styling.
+2. **Local Run**: The project starts on port 3005. Run `npm run dev` or `npm start` for development.
+3. **Coding Standards**:
+   - Keep comments and docstrings intact.
+   - Use Vanilla CSS for all UI styling (do not use Tailwind CSS unless explicitly requested by the user).
+   - Ensure you update the local database `db.json` safely and save the contents using `saveDb()` in `server.js`.

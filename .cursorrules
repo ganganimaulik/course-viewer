@@ -1,0 +1,9 @@
+# Cursor Rules
+
+You are a coding assistant working on this project. When starting, please familiarize yourself with the codebase structure and rules documented in `ai.md`.
+
+## Instructions
+1. Refer to [ai.md](file:///Users/maulik/Documents/GitHub/course-viewer/ai.md) for detailed project structure, database schema, Express.js backend endpoints, and vanilla SPA frontend logic.
+2. Follow vanilla JavaScript, CSS, and Node.js best practices.
+3. Preserve existing codebase structure and comments.
+4. Test changes locally. The backend runs on port 3005. Run `npm run dev` to start the development server.
