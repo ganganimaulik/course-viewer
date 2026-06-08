@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const { SpeechClient } = require('@google-cloud/speech').v2;
 const { Storage } = require('@google-cloud/storage');
 const { GoogleGenAI } = require('@google/genai');
+const pdfParse = require('pdf-parse');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -1064,7 +1065,8 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
         const ext = path.extname(item.path).toLowerCase();
         const isEligible = item.type === 'video' ||
                            (item.type === 'text' && (ext === '.md' || ext === '.txt')) ||
-                           (item.type === 'html' && (ext === '.html' || ext === '.htm'));
+                           (item.type === 'html' && (ext === '.html' || ext === '.htm')) ||
+                           (item.type === 'pdf' && ext === '.pdf');
         if (isEligible) {
           allItems.push({
             ...item,
@@ -1186,6 +1188,28 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
           } catch (err) {
             logMessage(`[Error] Failed to process HTML file "${item.name}": ${err.message}`);
           }
+        } else if (item.type === 'pdf') {
+          logMessage(`Reading PDF content for "${item.name}" and generating notes...`);
+          try {
+            const dataBuffer = fs.readFileSync(item.path);
+            const pdfData = await pdfParse(dataBuffer);
+            const text = pdfData.text || '';
+            if (text.trim()) {
+              const summary = await summarizeContent(text, 'document', gcp);
+              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
+
+              // Save the extracted text to transcript.txt so users can chat with it
+              const videoTranscriptPath = baseWithoutExt + '.transcript.txt';
+              fs.writeFileSync(videoTranscriptPath, text, 'utf8');
+
+              notesContent = summary;
+              hasNotes = true;
+            } else {
+              logMessage(`[Warning] Skipping empty PDF file "${item.name}".`);
+            }
+          } catch (err) {
+            logMessage(`[Error] Failed to process PDF file "${item.name}": ${err.message}`);
+          }
         }
       }
 
@@ -1289,58 +1313,99 @@ ${compilationText}
   }
 }
 
-// --- SINGLE VIDEO NOTES GENERATION ENDPOINT ---
-// --- SINGLE VIDEO NOTES GENERATION ENDPOINT ---
-app.post('/api/video/generate-transcript', async (req, res) => {
-  const videoPath = req.body.path;
-  if (!videoPath || !fs.existsSync(videoPath)) {
-    return res.status(400).send({ error: 'Invalid file path' });
+// Map to cache active generations by path: path -> Promise<{ transcript, summary }>
+const activeGenerations = new Map();
+
+// Background queue for pre-generating summaries sequentially
+const summaryQueue = [];
+let queueIsProcessing = false;
+
+function addToSummaryQueue(filePath) {
+  if (summaryQueue.includes(filePath)) return;
+  summaryQueue.push(filePath);
+  processSummaryQueue();
+}
+
+async function processSummaryQueue() {
+  if (queueIsProcessing) return;
+  queueIsProcessing = true;
+
+  while (summaryQueue.length > 0) {
+    const nextPath = summaryQueue.shift();
+    console.log(`[Queue] Processing background summary for: ${nextPath}`);
+    try {
+      await generateSummaryForPath(nextPath);
+    } catch (err) {
+      console.error(`[Queue] Error processing background summary for ${nextPath}:`, err);
+    }
   }
 
-  const gcp = db.gcpConfig || {};
-  if (!gcp.projectId) {
-    return res.status(400).send({ error: 'GCP Project ID must be configured in Settings.' });
+  queueIsProcessing = false;
+}
+
+async function generateSummaryForPath(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw new Error('Invalid file path');
   }
 
-  const ext = path.extname(videoPath).toLowerCase();
-  const baseWithoutExt = videoPath.slice(0, -ext.length);
-  const transcriptPath = baseWithoutExt + '.transcript.txt';
-  const summaryPath = baseWithoutExt + '.summary.md';
+  // If there's an active generation for this exact file, return its promise
+  if (activeGenerations.has(filePath)) {
+    console.log(`[Generate] Summary for ${filePath} already in progress. Sharing promise.`);
+    return activeGenerations.get(filePath);
+  }
 
-  try {
+  const promise = (async () => {
+    const gcp = db.gcpConfig || {};
+    if (!gcp.projectId) {
+      throw new Error('GCP Project ID must be configured in Settings.');
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const baseWithoutExt = filePath.slice(0, -ext.length);
+    const transcriptPath = baseWithoutExt + '.transcript.txt';
+    const summaryPath = baseWithoutExt + '.summary.md';
+
     let transcript = '';
 
     if (['.html', '.htm'].includes(ext)) {
       if (fs.existsSync(transcriptPath)) {
         transcript = fs.readFileSync(transcriptPath, 'utf8');
       } else {
-        const htmlContent = fs.readFileSync(videoPath, 'utf8');
+        const htmlContent = fs.readFileSync(filePath, 'utf8');
         transcript = cleanHtmlText(htmlContent);
         fs.writeFileSync(transcriptPath, transcript, 'utf8');
       }
       const summary = await summarizeContent(transcript, 'document', gcp);
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
-      return res.send({
-        success: true,
-        transcript,
-        summary
-      });
-    } else if (['.txt', '.md'].includes(ext) || CODE_EXTENSIONS.includes(ext)) {
+      return { transcript, summary };
+    } else if (ext === '.pdf') {
       if (fs.existsSync(transcriptPath)) {
         transcript = fs.readFileSync(transcriptPath, 'utf8');
       } else {
-        transcript = fs.readFileSync(videoPath, 'utf8');
+        const dataBuffer = fs.readFileSync(filePath);
+        const pdfData = await pdfParse(dataBuffer);
+        transcript = pdfData.text || '';
+        if (!transcript.trim()) {
+          throw new Error('PDF contains no extractable text.');
+        }
         fs.writeFileSync(transcriptPath, transcript, 'utf8');
       }
       const summary = await summarizeContent(transcript, 'document', gcp);
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
-      return res.send({
-        success: true,
-        transcript,
-        summary
-      });
+      return { transcript, summary };
+    } else if (['.txt', '.md'].includes(ext) || CODE_EXTENSIONS.includes(ext)) {
+      if (fs.existsSync(transcriptPath)) {
+        transcript = fs.readFileSync(transcriptPath, 'utf8');
+      } else {
+        transcript = fs.readFileSync(filePath, 'utf8');
+        fs.writeFileSync(transcriptPath, transcript, 'utf8');
+      }
+      const summary = await summarizeContent(transcript, 'document', gcp);
+      fs.writeFileSync(summaryPath, summary, 'utf8');
+
+      return { transcript, summary };
     }
 
     // Video files fallback
@@ -1354,33 +1419,79 @@ app.post('/api/video/generate-transcript', async (req, res) => {
     if (fs.existsSync(transcriptPath)) {
       transcript = fs.readFileSync(transcriptPath, 'utf8');
     } else if (subtitlePath) {
-      console.log(`[Transcript] Found subtitles for ${videoPath}. Parsing track content...`);
+      console.log(`[Transcript] Found subtitles for ${filePath}. Parsing track content...`);
       const subtitleContent = fs.readFileSync(subtitlePath, 'utf8');
       transcript = cleanSubtitleText(subtitleContent);
       fs.writeFileSync(transcriptPath, transcript, 'utf8');
     } else {
       if (!gcp.bucketName) {
-        return res.status(400).send({ error: 'GCS Bucket Name must be configured in Settings to run speech-to-text.' });
+        throw new Error('GCS Bucket Name must be configured in Settings to run speech-to-text.');
       }
-      transcript = await transcribeVideoWithChirp(videoPath, gcp);
+      transcript = await transcribeVideoWithChirp(filePath, gcp);
       fs.writeFileSync(transcriptPath, transcript, 'utf8');
     }
 
-    const relPath = getRelativePathFromAbsolute(videoPath);
+    const relPath = getRelativePathFromAbsolute(filePath);
     const summary = await summarizeContent(transcript, 'video', gcp, relPath);
     fs.writeFileSync(summaryPath, summary, 'utf8');
 
+    return { transcript, summary };
+  })();
+
+  activeGenerations.set(filePath, promise);
+
+  try {
+    return await promise;
+  } finally {
+    activeGenerations.delete(filePath);
+  }
+}
+
+// --- SINGLE VIDEO NOTES GENERATION ENDPOINT ---
+app.post('/api/video/generate-transcript', async (req, res) => {
+  const videoPath = req.body.path;
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    return res.status(400).send({ error: 'Invalid file path' });
+  }
+
+  try {
+    const result = await generateSummaryForPath(videoPath);
     res.send({
       success: true,
-      transcript,
-      summary
+      transcript: result.transcript,
+      summary: result.summary
     });
-
   } catch (err) {
     console.error('Error generating transcript/summary:', err);
     res.status(500).send({ error: err.message || 'Failed to generate transcript and summary' });
   }
 });
+
+// --- BATCH PRE-GENERATE NEIGHBOR SUMMARIES ENDPOINT ---
+app.post('/api/video/pregenerate-summaries', (req, res) => {
+  const { paths } = req.body;
+  if (!paths || !Array.isArray(paths)) {
+    return res.status(400).send({ error: 'paths array is required' });
+  }
+
+  const queued = [];
+  for (const filePath of paths) {
+    if (!filePath || !fs.existsSync(filePath)) continue;
+
+    // Check if summary already exists
+    const ext = path.extname(filePath).toLowerCase();
+    const baseWithoutExt = filePath.slice(0, -ext.length);
+    const summaryPath = baseWithoutExt + '.summary.md';
+
+    if (!fs.existsSync(summaryPath)) {
+      addToSummaryQueue(filePath);
+      queued.push(filePath);
+    }
+  }
+
+  res.send({ success: true, queuedCount: queued.length, queuedPaths: queued });
+});
+
 
 // Chat with video transcript endpoint
 app.post('/api/video/chat', async (req, res) => {

@@ -16,7 +16,8 @@ let state = {
   currentWorkspaceTab: 'lessons',
   sidebarAutoCollapsed: false,
   chatHistory: [],
-  courseChatHistory: []
+  courseChatHistory: [],
+  generatingTranscripts: {}
 };
 
 // Toast notification function
@@ -1009,8 +1010,8 @@ function selectItem(item, section = null) {
     document.getElementById('other-file-ext').textContent = item.extension;
   }
 
-  // AI sidebar support for eligible types (video, html, text, code)
-  const eligibleTypes = ['video', 'html', 'text', 'code'];
+  // AI sidebar support for eligible types (video, html, text, code, pdf)
+  const eligibleTypes = ['video', 'html', 'text', 'code', 'pdf'];
   const btnToggleSidebar = document.getElementById('btn-toggle-ai-sidebar');
   const extraSidebar = document.getElementById('video-extra-sidebar');
 
@@ -2119,6 +2120,20 @@ function switchVideoExtraTab(tabName) {
   }
 }
 
+function getEligibleItemsList() {
+  const list = [];
+  if (!state.currentCourse || !state.currentCourse.sections) return list;
+  const eligibleTypes = ['video', 'pdf', 'html', 'text', 'code'];
+  state.currentCourse.sections.forEach(sec => {
+    sec.items.forEach(item => {
+      if (eligibleTypes.includes(item.type)) {
+        list.push(item);
+      }
+    });
+  });
+  return list;
+}
+
 async function loadVideoMetadata(item) {
   const transcriptBody = document.getElementById('transcript-body');
   const summaryBody = document.getElementById('summary-body');
@@ -2127,6 +2142,26 @@ async function loadVideoMetadata(item) {
   const isVideo = item.type === 'video';
   transcriptBody.innerHTML = `<p class="empty-pane-msg">Checking for ${isVideo ? 'transcript' : 'extracted text'}...</p>`;
   summaryBody.innerHTML = '<p class="empty-pane-msg">Checking for summary...</p>';
+
+  // Sync button and loading spinner state for active generation tasks
+  const genBtn = document.getElementById('btn-generate-transcript');
+  const spinner = document.getElementById('gcp-loading-spinner');
+  const statusSpan = document.getElementById('gcp-loading-status');
+  const isGenerating = state.generatingTranscripts && state.generatingTranscripts[item.path];
+  if (genBtn && spinner) {
+    if (isGenerating) {
+      genBtn.style.display = 'none';
+      spinner.style.display = 'flex';
+      if (statusSpan) {
+        statusSpan.textContent = isVideo
+          ? 'Transcribing audio (takes a moment)...'
+          : 'Extracting text and generating summary...';
+      }
+    } else {
+      genBtn.style.display = '';
+      spinner.style.display = 'none';
+    }
+  }
   
   // Reset chat state for the new item
   state.chatHistory = [];
@@ -2136,6 +2171,8 @@ async function loadVideoMetadata(item) {
   }
   renderChatMessages();
   
+  const hasGcp = state.gcpConfig && state.gcpConfig.projectId && (item.type !== 'video' || state.gcpConfig.bucketName);
+
   try {
     const res = await fetch(`${API_BASE}/api/video/metadata?path=${encodeURIComponent(item.path)}`);
     if (!res.ok) throw new Error('Failed to load video metadata');
@@ -2157,6 +2194,38 @@ async function loadVideoMetadata(item) {
       }
     } else {
       summaryBody.innerHTML = '<p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>';
+      
+      // Auto-trigger generation for current item if GCP settings are configured
+      if (!isGenerating && hasGcp) {
+        if (!state.autoTriggeredGenerations) {
+          state.autoTriggeredGenerations = new Set();
+        }
+        if (!state.autoTriggeredGenerations.has(item.path)) {
+          state.autoTriggeredGenerations.add(item.path);
+          console.log(`[Auto] Automatically generating summary for: ${item.path}`);
+          generateTranscriptAndSummaryAction();
+        }
+      }
+    }
+
+    // Trigger pre-generation for next 5 and previous 5 neighbors in the background
+    if (hasGcp) {
+      const flat = getEligibleItemsList();
+      const index = flat.findIndex(i => i.path === item.path);
+      if (index !== -1) {
+        const nextFive = flat.slice(index + 1, index + 6);
+        const prevFive = flat.slice(Math.max(0, index - 5), index);
+        const neighborPaths = [...nextFive, ...prevFive].map(i => i.path);
+
+        if (neighborPaths.length > 0) {
+          console.log(`[Auto] Requesting background pre-generation for ${neighborPaths.length} neighbors...`);
+          fetch(`${API_BASE}/api/video/pregenerate-summaries`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: neighborPaths })
+          }).catch(err => console.error('[Auto] Error requesting neighbor pre-generation:', err));
+        }
+      }
     }
   } catch (err) {
     console.error('Error loading video metadata:', err);
@@ -2166,7 +2235,7 @@ async function loadVideoMetadata(item) {
 }
 
 async function generateTranscriptAndSummaryAction() {
-  const eligibleTypes = ['video', 'html', 'text', 'code'];
+  const eligibleTypes = ['video', 'html', 'text', 'code', 'pdf'];
   if (!state.currentItem || !eligibleTypes.includes(state.currentItem.type)) {
     showToast('No active video or document loaded.');
     return;
@@ -2190,6 +2259,14 @@ async function generateTranscriptAndSummaryAction() {
     return;
   }
   
+  const targetPath = state.currentItem.path;
+  const targetItem = state.currentItem;
+
+  if (!state.generatingTranscripts) {
+    state.generatingTranscripts = {};
+  }
+  state.generatingTranscripts[targetPath] = true;
+
   genBtn.style.display = 'none';
   spinner.style.display = 'flex';
   if (statusSpan) {
@@ -2202,7 +2279,7 @@ async function generateTranscriptAndSummaryAction() {
     const res = await fetch(`${API_BASE}/api/video/generate-transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: state.currentItem.path })
+      body: JSON.stringify({ path: targetPath })
     });
     
     if (!res.ok) {
@@ -2211,16 +2288,24 @@ async function generateTranscriptAndSummaryAction() {
     }
     
     const data = await res.json();
-    showToast('AI Notes generated successfully!');
+    showToast(`AI Notes generated successfully for ${targetItem.name}!`);
     
-    // Refresh the metadata panel
-    await loadVideoMetadata(state.currentItem);
+    // Refresh the metadata panel ONLY if the item is still selected
+    if (state.currentItem && state.currentItem.path === targetPath) {
+      await loadVideoMetadata(state.currentItem);
+    }
   } catch (err) {
     console.error('Generation failed:', err);
     showToast(err.message || 'Error generating transcription/summary');
   } finally {
-    genBtn.style.display = '';
-    spinner.style.display = 'none';
+    if (state.generatingTranscripts) {
+      delete state.generatingTranscripts[targetPath];
+    }
+    // Reset buttons ONLY if the item is still selected
+    if (state.currentItem && state.currentItem.path === targetPath) {
+      if (genBtn) genBtn.style.display = '';
+      if (spinner) spinner.style.display = 'none';
+    }
   }
 }
 
@@ -2522,7 +2607,8 @@ function renderSummaryScopeSelector() {
       const ext = item.name.split('.').pop().toLowerCase();
       return item.type === 'video' ||
              (item.type === 'text' && (ext === 'md' || ext === 'txt')) ||
-             (item.type === 'html' && (ext === 'html' || ext === 'htm'));
+             (item.type === 'html' && (ext === 'html' || ext === 'htm')) ||
+             (item.type === 'pdf' && ext === 'pdf');
     });
 
     if (eligibleItems.length === 0) return;
@@ -2830,7 +2916,7 @@ function handleChatInputKeyDown(event) {
 }
 
 async function executeChatMessage(messageText) {
-  const eligibleTypes = ['video', 'html', 'text', 'code'];
+  const eligibleTypes = ['video', 'html', 'text', 'code', 'pdf'];
   if (!state.currentItem || !eligibleTypes.includes(state.currentItem.type)) {
     showToast('No active video or document loaded.');
     return;
