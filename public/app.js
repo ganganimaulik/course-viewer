@@ -2314,14 +2314,61 @@ function getCalloutLabel(type) {
 
 function parseMarkdown(md) {
   if (!md) return '';
+
+  const placeholders = [];
+  let placeholderCount = 0;
+
+  // Extract block math $$...$$
+  let processedMd = md.replace(/\$\$([\s\S]+?)\$\$/g, (match, math) => {
+    const placeholder = `@@MATH_BLOCK_${placeholderCount++}@@`;
+    placeholders.push({ placeholder, math, displayMode: true, raw: match });
+    return placeholder;
+  });
+
+  // Extract inline math $...$
+  processedMd = processedMd.replace(/\$((?!\s)(?:[^\$\\]|\\.)+?)(?<!\s)\$/g, (match, math) => {
+    const placeholder = `@@MATH_BLOCK_${placeholderCount++}@@`;
+    placeholders.push({ placeholder, math, displayMode: false, raw: match });
+    return placeholder;
+  });
+
+  // Parse Markdown (marked.js or custom fallback)
+  let html = '';
   if (typeof marked !== 'undefined' && marked.parse) {
     try {
-      return marked.parse(md, { gfm: true, breaks: true });
+      html = marked.parse(processedMd, { gfm: true, breaks: true });
     } catch (err) {
       console.error('Marked rendering error:', err);
+      html = fallbackParseMarkdown(processedMd);
     }
+  } else {
+    html = fallbackParseMarkdown(processedMd);
   }
-  
+
+  // Restore the math placeholders with rendered KaTeX HTML
+  placeholders.forEach(({ placeholder, math, displayMode, raw }) => {
+    let renderedMath = raw;
+    if (typeof katex !== 'undefined') {
+      try {
+        renderedMath = katex.renderToString(math, {
+          displayMode: displayMode,
+          throwOnError: false
+        });
+      } catch (err) {
+        console.error('KaTeX rendering error:', err);
+      }
+    } else {
+      renderedMath = displayMode 
+        ? `<pre class="raw-math">${raw}</pre>` 
+        : `<code class="raw-math">${raw}</code>`;
+    }
+    html = html.split(placeholder).join(renderedMath);
+  });
+
+  return html;
+}
+
+function fallbackParseMarkdown(md) {
   let html = md;
   // Escape HTML tags to prevent XSS
   html = html
