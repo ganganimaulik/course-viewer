@@ -1779,6 +1779,15 @@ app.get('/api/course/summary-status', (req, res) => {
 });
 
 // Start Server
-app.listen(PORT, () => {
-  console.log(`Course Viewer server running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Course Viewer server running on http://localhost:${PORT}`);
+  });
+}
+
+// Export for testing
+module.exports = {
+  app,
+  timestampToSeconds,
+  insertTimestampLinks
+};

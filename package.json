@@ -6,6 +6,7 @@
   "scripts": {
     "start": "nodemon server.js",
     "dev": "nodemon server.js",
+    "test": "jest",
     "pm2:start": "pm2 start ecosystem.config.js",
     "pm2:stop": "pm2 stop ecosystem.config.js",
     "pm2:restart": "pm2 restart ecosystem.config.js",
@@ -20,6 +21,7 @@
     "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
+    "jest": "^30.4.2",
     "nodemon": "^3.1.0"
   }
 }
