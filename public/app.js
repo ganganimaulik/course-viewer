@@ -33,7 +33,7 @@ function showToast(message) {
 
 // Format duration to MM:SS or HH:MM:SS
 function formatTime(seconds) {
-  if (isNaN(seconds)) return "00:00";
+  if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return "00:00";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
@@ -3108,3 +3108,8 @@ window.handleCourseChatInputKeyDown = handleCourseChatInputKeyDown;
 window.sendCourseChatMessage = sendCourseChatMessage;
 window.renderCourseChatMessages = renderCourseChatMessages;
 
+
+// Export for Node environments (Jest testing)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { formatTime };
+}
