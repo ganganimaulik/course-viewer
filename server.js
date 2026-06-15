@@ -1788,4 +1788,5 @@ if (require.main === module) {
 module.exports = {
   formatSecondsToTimestamp,
   app,
+  formatTimestamp
 };
