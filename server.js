@@ -6,7 +6,13 @@ const { exec } = require('child_process');
 const { SpeechClient } = require('@google-cloud/speech').v2;
 const { Storage } = require('@google-cloud/storage');
 const { GoogleGenAI } = require('@google/genai');
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
+
+async function pdfParse(dataBuffer) {
+  const parser = new PDFParse({ data: dataBuffer });
+  const result = await parser.getText();
+  return result;
+}
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -660,30 +666,40 @@ app.get('/api/video/metadata', (req, res) => {
   const transcriptPath = baseWithoutExt + '.transcript.txt';
   const summaryPath = baseWithoutExt + '.summary.md';
 
-  const metadata = {
-    hasTranscript: fs.existsSync(transcriptPath),
-    hasSummary: fs.existsSync(summaryPath),
-    transcript: '',
-    summary: ''
-  };
-
-  if (metadata.hasTranscript) {
+  let transcript = '';
+  let hasTranscript = false;
+  if (fs.existsSync(transcriptPath)) {
     try {
-      metadata.transcript = fs.readFileSync(transcriptPath, 'utf8');
+      const content = fs.readFileSync(transcriptPath, 'utf8');
+      if (content.trim()) {
+        transcript = content;
+        hasTranscript = true;
+      }
     } catch (err) {
       console.error('Error reading transcript file:', err);
     }
   }
 
-  if (metadata.hasSummary) {
+  let summary = '';
+  let hasSummary = false;
+  if (fs.existsSync(summaryPath)) {
     try {
-      metadata.summary = fs.readFileSync(summaryPath, 'utf8');
+      const content = fs.readFileSync(summaryPath, 'utf8');
+      if (content.trim()) {
+        summary = content;
+        hasSummary = true;
+      }
     } catch (err) {
       console.error('Error reading summary file:', err);
     }
   }
 
-  res.send(metadata);
+  res.send({
+    hasTranscript,
+    hasSummary,
+    transcript,
+    summary
+  });
 });
 
 // --- HELPERS FOR TRANSCRIPTION AND SUMMARIZATION ---
@@ -924,7 +940,56 @@ function formatSecondsToTimestamp(totalSeconds) {
   }
 }
 
-// Transcribe audio using Google Cloud Speech-to-Text V2 Chirp
+// Helper to transcribe audio using Vertex AI Gemini 3.5 Flash
+async function transcribeVideoWithGemini(gcsUri, gcp) {
+  const location = gcp.location || 'global';
+  const ai = new GoogleGenAI({
+    enterprise: true,
+    project: gcp.projectId,
+    location: location,
+  });
+
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(`[Speech-to-Text] Starting Gemini 3.5 Flash transcription (attempt ${attempt}/${maxRetries})...`);
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: [
+          {
+            fileData: {
+              fileUri: gcsUri,
+              mimeType: 'audio/wav',
+            },
+          },
+          `You are an expert transcriber. Please provide a clean, verbatim transcription of the audio file.
+Format the transcription with timestamps like [MM:SS] or [HH:MM:SS] at the start of each natural paragraph or thought boundary based on the audio content.
+Only output the transcription text, do not add introductory remarks.`,
+        ],
+      });
+
+      const transcript = response.text;
+      if (!transcript || !transcript.trim() || transcript.trim().length < 20) {
+        console.warn(`[Speech-to-Text] Gemini transcription attempt ${attempt} returned empty/short whitespace-only response: "${transcript || ''}"`);
+        if (attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+          continue;
+        }
+        throw new Error('Gemini transcription returned empty or invalid text after all retries.');
+      }
+      return transcript;
+    } catch (err) {
+      console.warn(`[Speech-to-Text] Gemini transcription attempt ${attempt} failed: ${err.message}`);
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// Transcribe audio using Google Cloud Speech-to-Text V2 Chirp (with Gemini primary and timeout fallback)
 async function transcribeVideoWithChirp(videoPath, gcp) {
   const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const tempAudioPath = path.join(__dirname, `temp_audio_${uniqueId}.wav`);
@@ -959,62 +1024,86 @@ async function transcribeVideoWithChirp(videoPath, gcp) {
     });
     gcsUri = `gs://${gcp.bucketName}/${gcsDestination}`;
 
-    // 3. Transcribe with Speech-to-Text V2 Chirp
-    console.log(`[Speech-to-Text] Starting Chirp transcription...`);
-    const speechLocation = gcp.speechLocation || 'us-central1';
-    const speechClient = new SpeechClient({
-      apiEndpoint: `${speechLocation}-speech.googleapis.com`
-    });
+    // 3. Try Gemini first (highly recommended: fast, accurate, doesn't hang)
+    try {
+      const transcript = await transcribeVideoWithGemini(gcsUri, gcp);
+      console.log(`[Speech-to-Text] Gemini transcription completed successfully!`);
+      return transcript;
+    } catch (geminiErr) {
+      console.warn(`[Speech-to-Text] Gemini transcription failed, falling back to Chirp: ${geminiErr.message}`);
 
-    const recognizerPath = `projects/${gcp.projectId}/locations/${speechLocation}/recognizers/_`;
-    const sttRequest = {
-      recognizer: recognizerPath,
-      files: [{ uri: gcsUri }],
-      config: {
-        languageCodes: ['en-US'],
-        model: 'chirp_2',
-        features: {
-          enableWordTimeOffsets: true
+      // 4. Fallback: Transcribe with Speech-to-Text V2 Chirp
+      console.log(`[Speech-to-Text] Starting Chirp fallback transcription...`);
+      const speechLocation = gcp.speechLocation || 'us-central1';
+      const speechClient = new SpeechClient({
+        apiEndpoint: `${speechLocation}-speech.googleapis.com`
+      });
+
+      const recognizerPath = `projects/${gcp.projectId}/locations/${speechLocation}/recognizers/_`;
+      const sttRequest = {
+        recognizer: recognizerPath,
+        files: [{ uri: gcsUri }],
+        config: {
+          languageCodes: ['en-US'],
+          model: 'chirp_3',
+          features: {
+            enableWordTimeOffsets: true
+          },
+          autoDecodingConfig: {}
         },
-        autoDecodingConfig: {}
-      },
-      recognitionOutputConfig: {
-        inlineResponseConfig: {}
+        recognitionOutputConfig: {
+          inlineResponseConfig: {}
+        }
+      };
+
+      const [operation] = await speechClient.batchRecognize(sttRequest);
+
+      // Wait for the Chirp LRO to complete, with a 10-minute timeout
+      const responsePromise = operation.promise();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Chirp Speech-to-Text transcription timed out (10 minutes)')), 10 * 60 * 1000)
+      );
+      const [sttResponse] = await Promise.race([responsePromise, timeoutPromise]);
+
+      let transcript = '';
+      const results = sttResponse.results || {};
+      if (results[gcsUri] && results[gcsUri].transcript && results[gcsUri].transcript.results) {
+        transcript = results[gcsUri].transcript.results
+          .map(r => {
+            const alt = r.alternatives[0];
+            if (!alt) return '';
+            let segmentText = alt.transcript;
+            if (alt.words && alt.words.length > 0) {
+              const firstWord = alt.words[0];
+              const offset = firstWord.startOffset || firstWord.startTime;
+              let startSec = 0;
+              if (offset) {
+                if (typeof offset === 'string') {
+                  const parsed = parseFloat(offset);
+                  startSec = isNaN(parsed) ? 0 : parsed;
+                } else if (typeof offset === 'object') {
+                  startSec = parseFloat(offset.seconds || 0) + parseFloat(offset.nanos || 0) / 1e9;
+                }
+              }
+              const timeStr = formatSecondsToTimestamp(startSec);
+              return `${timeStr} ${segmentText}`;
+            }
+            return segmentText;
+          })
+          .filter(Boolean)
+          .join(' ');
       }
-    };
 
-    const [operation] = await speechClient.batchRecognize(sttRequest);
-    const [sttResponse] = await operation.promise();
+      if (results[gcsUri] && results[gcsUri].error) {
+        throw new Error(`Speech-to-Text failed: ${results[gcsUri].error.message || 'Internal STT error'}`);
+      }
 
-    let transcript = '';
-    const results = sttResponse.results || {};
-    if (results[gcsUri] && results[gcsUri].transcript && results[gcsUri].transcript.results) {
-      transcript = results[gcsUri].transcript.results
-        .map(r => {
-          const alt = r.alternatives[0];
-          if (!alt) return '';
-          let segmentText = alt.transcript;
-          if (alt.words && alt.words.length > 0) {
-            const firstWord = alt.words[0];
-            const startSec = parseFloat(firstWord.startTime.seconds || 0) + parseFloat(firstWord.startTime.nanos || 0) / 1e9;
-            const timeStr = formatSecondsToTimestamp(startSec);
-            return `${timeStr} ${segmentText}`;
-          }
-          return segmentText;
-        })
-        .filter(Boolean)
-        .join(' ');
+      if (!transcript) {
+        throw new Error('Transcription returned empty text.');
+      }
+
+      return transcript;
     }
-
-    if (results[gcsUri] && results[gcsUri].error) {
-      throw new Error(`Speech-to-Text failed: ${results[gcsUri].error.message || 'Internal STT error'}`);
-    }
-
-    if (!transcript) {
-      throw new Error('Transcription returned empty text.');
-    }
-
-    return transcript;
   } finally {
     // Clean up local temp file
     if (fs.existsSync(tempAudioPath)) {
@@ -1093,7 +1182,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
     const skippedFiles = [];
     let completedCount = 0;
 
-    await limitConcurrency(3, itemsToProcess, async (item, index) => {
+    await limitConcurrency(10, itemsToProcess, async (item, index) => {
       const ext = path.extname(item.path);
       const baseWithoutExt = item.path.slice(0, -ext.length);
       const itemSummaryPath = baseWithoutExt + '.summary.md';
@@ -1110,10 +1199,18 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
       } else {
         if (item.type === 'video') {
           const videoTranscriptPath = baseWithoutExt + '.transcript.txt';
+          let transcript = '';
           if (fs.existsSync(videoTranscriptPath)) {
+            try {
+              transcript = fs.readFileSync(videoTranscriptPath, 'utf8').trim();
+            } catch (err) {
+              logMessage(`[Error] Failed to read transcript for "${item.name}": ${err.message}`);
+            }
+          }
+
+          if (transcript) {
             logMessage(`Found existing transcript for "${item.name}". Generating summary...`);
             try {
-              const transcript = fs.readFileSync(videoTranscriptPath, 'utf8');
               const summary = await summarizeContent(transcript, 'video', gcp, item.relativePath);
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
               notesContent = summary;
@@ -1161,11 +1258,16 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
           logMessage(`Reading Markdown content for "${item.name}" and generating notes...`);
           try {
             const content = fs.readFileSync(item.path, 'utf8');
-            if (content.trim()) {
+            const trimmed = content.trim();
+            const isUrl = /^(https?:\/\/[^\s]+)$/i.test(trimmed);
+            if (trimmed && !isUrl) {
               const summary = await summarizeContent(content, 'document', gcp);
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
               notesContent = summary;
               hasNotes = true;
+            } else if (isUrl) {
+              logMessage(`[Warning] Skipping text file "${item.name}" because it only contains a URL.`);
+              skippedFiles.push(item.name);
             } else {
               logMessage(`[Warning] Skipping empty text file "${item.name}".`);
             }
@@ -1366,10 +1468,18 @@ async function generateSummaryForPath(filePath) {
     const summaryPath = baseWithoutExt + '.summary.md';
 
     let transcript = '';
+    let existingTranscript = '';
+    if (fs.existsSync(transcriptPath)) {
+      try {
+        existingTranscript = fs.readFileSync(transcriptPath, 'utf8');
+      } catch (err) {
+        console.error('Error reading transcript file:', err);
+      }
+    }
 
     if (['.html', '.htm'].includes(ext)) {
-      if (fs.existsSync(transcriptPath)) {
-        transcript = fs.readFileSync(transcriptPath, 'utf8');
+      if (existingTranscript && existingTranscript.trim()) {
+        transcript = existingTranscript;
       } else {
         const htmlContent = fs.readFileSync(filePath, 'utf8');
         transcript = cleanHtmlText(htmlContent);
@@ -1380,8 +1490,8 @@ async function generateSummaryForPath(filePath) {
 
       return { transcript, summary };
     } else if (ext === '.pdf') {
-      if (fs.existsSync(transcriptPath)) {
-        transcript = fs.readFileSync(transcriptPath, 'utf8');
+      if (existingTranscript && existingTranscript.trim()) {
+        transcript = existingTranscript;
       } else {
         const dataBuffer = fs.readFileSync(filePath);
         const pdfData = await pdfParse(dataBuffer);
@@ -1396,8 +1506,8 @@ async function generateSummaryForPath(filePath) {
 
       return { transcript, summary };
     } else if (['.txt', '.md'].includes(ext) || CODE_EXTENSIONS.includes(ext)) {
-      if (fs.existsSync(transcriptPath)) {
-        transcript = fs.readFileSync(transcriptPath, 'utf8');
+      if (existingTranscript && existingTranscript.trim()) {
+        transcript = existingTranscript;
       } else {
         transcript = fs.readFileSync(filePath, 'utf8');
         fs.writeFileSync(transcriptPath, transcript, 'utf8');
@@ -1416,8 +1526,8 @@ async function generateSummaryForPath(filePath) {
       subtitlePath = baseWithoutExt + '.srt';
     }
 
-    if (fs.existsSync(transcriptPath)) {
-      transcript = fs.readFileSync(transcriptPath, 'utf8');
+    if (existingTranscript && existingTranscript.trim()) {
+      transcript = existingTranscript;
     } else if (subtitlePath) {
       console.log(`[Transcript] Found subtitles for ${filePath}. Parsing track content...`);
       const subtitleContent = fs.readFileSync(subtitlePath, 'utf8');
@@ -1512,12 +1622,20 @@ app.post('/api/video/chat', async (req, res) => {
   const baseWithoutExt = videoPath.slice(0, -ext.length);
   const transcriptPath = baseWithoutExt + '.transcript.txt';
 
-  if (!fs.existsSync(transcriptPath)) {
+  let transcript = '';
+  if (fs.existsSync(transcriptPath)) {
+    try {
+      transcript = fs.readFileSync(transcriptPath, 'utf8').trim();
+    } catch (err) {
+      console.error('Error reading transcript file:', err);
+    }
+  }
+
+  if (!transcript) {
     return res.status(400).send({ error: 'No transcript available. Please generate AI notes first.' });
   }
 
   try {
-    const transcript = fs.readFileSync(transcriptPath, 'utf8');
     const location = gcp.location || 'global';
     const ai = new GoogleGenAI({
       enterprise: true,
