@@ -51,6 +51,8 @@ A local web application designed to help you organize, play, and track learning 
 4. Open the application in your browser:
    [http://localhost:3005](http://localhost:3005)
 
+The server only accepts requests from this Mac: it listens on `127.0.0.1`, rejects requests made by other websites, and only serves files inside your watched folders.
+
 ### AI Notes Setup (Fireworks AI + Modal)
 1. Create a `.env` file from the template and add your [Fireworks API key](https://app.fireworks.ai/settings/users/api-keys):
    ```bash

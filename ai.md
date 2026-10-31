@@ -96,6 +96,7 @@ The Express app exposes the following APIs:
 - Do not split `server.js` unless explicitly requested. Keep imports clean.
 - Ensure all file paths are handled safely using Node's `path` library.
 - Safely escape shells in `exec` calls. Avoid shell injection vulnerabilities.
+- The server listens on `127.0.0.1` only, sends no CORS headers, and rejects non-local `Host` headers and cross-site writes. Any endpoint that takes a file or course path must check it with `isInWatchedFolder()`.
 - For all writing/updating of progress, ensure `saveDb()` is called afterwards.
 - Preserve any existing comments/logic in `server.js`.
 

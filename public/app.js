@@ -1,6 +1,9 @@
 // --- API CONFIGURATION ---
 const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3005' : '';
 
+// File types listed under the Lessons tab; all other types are listed under Resources
+const LESSON_TYPES = ['video', 'pdf', 'html', 'text'];
+
 // --- APPLICATION STATE ---
 let state = {
   courses: [],
@@ -239,6 +242,19 @@ async function refreshCatalog(isInitialLoad = false) {
       const updatedCourse = state.courses.find(c => c.id === state.currentCourse.id);
       if (updatedCourse) {
         state.currentCourse = updatedCourse;
+        // Re-point the open item at its refreshed object too, so its progress isn't stale (e.g. after a reset)
+        if (state.currentItem) {
+          for (const sec of updatedCourse.sections) {
+            const freshItem = sec.items.find(i => i.path === state.currentItem.path);
+            if (freshItem) {
+              if (state.videoItem === state.currentItem) state.videoItem = freshItem;
+              state.currentItem = freshItem;
+              state.currentSection = sec;
+              break;
+            }
+          }
+          updateHeaderActionBtn();
+        }
         document.getElementById('workspace-course-progress').textContent = `${updatedCourse.progressPercent}% Completed`;
         const watchBtn = document.getElementById('btn-watch-course');
         if (watchBtn) {
@@ -345,8 +361,8 @@ function renderDashboard() {
           <span class="resume-date">${dateStudied}</span>
         </div>
         <div class="resume-title-box">
-          <div class="resume-course-title">${item.courseTitle}</div>
-          <div class="resume-file-title" title="${item.name}">${item.name}</div>
+          <div class="resume-course-title">${escapeHtml(item.courseTitle)}</div>
+          <div class="resume-file-title" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
         </div>
         <div class="resume-progress-container">
           <div class="resume-progress-text">
@@ -457,15 +473,15 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
     card.innerHTML = `
       <div class="course-card-top">
         <div class="badge-and-reset">
-          <span class="course-source-badge" title="${c.sourceRoot}">${folderBadge}</span>
+          <span class="course-source-badge" title="${escapeHtml(c.sourceRoot)}">${escapeHtml(folderBadge)}</span>
           <div class="card-actions-row">
             ${(c.completedItems > 0 || c.hasProgress) ? `
-              <button class="card-reset-btn" onclick="confirmResetCourseProgressCard(event, '${c.id}', '${c.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Reset Course Progress">
+              <button class="card-reset-btn" title="Reset Course Progress">
                 <svg class="card-reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
               </button>
             ` : ''}
             ${c.completedItems < c.totalItems ? `
-              <button class="card-watch-btn" onclick="confirmWatchCourseProgressCard(event, '${c.id}', '${c.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Mark Course as Watched">
+              <button class="card-watch-btn" title="Mark Course as Watched">
                 <svg class="card-watch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"/></svg>
               </button>
             ` : ''}
@@ -486,7 +502,7 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
           <div class="ring-percent">${c.progressPercent}%</div>
         </div>
       </div>
-      <div class="course-title" title="${c.title}">${c.title}</div>
+      <div class="course-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
       <div class="course-meta">
         <div class="course-meta-row">
           <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
@@ -504,6 +520,11 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
         </div>` : ''}
       </div>
     `;
+    // Bind actions in JS rather than inline onclick strings, which break on titles containing quotes
+    const resetBtn = card.querySelector('.card-reset-btn');
+    if (resetBtn) resetBtn.onclick = (e) => confirmResetCourseProgressCard(e, c.id, c.title);
+    const watchBtn = card.querySelector('.card-watch-btn');
+    if (watchBtn) watchBtn.onclick = (e) => confirmWatchCourseProgressCard(e, c.id, c.title);
     targetContainer.appendChild(card);
   });
 }
@@ -539,8 +560,10 @@ function resumePlayback(item) {
   const course = state.courses.find(c => c.id === item.courseId);
   if (!course) return;
   
-  openCourse(item.courseId);
-  selectItem(item);
+  // Open on the tab that lists this item (the last-used tab may be Summary or the other list), and
+  // let openCourse select the course's own item object rather than this dashboard copy
+  localStorage.setItem('current-workspace-tab', LESSON_TYPES.includes(item.type) ? 'lessons' : 'resources');
+  openCourse(item.courseId, item.path);
 }
 
 // Open Course outline view
@@ -549,7 +572,12 @@ function openCourse(courseId, restoreItemPath = null) {
   if (!course) return;
 
   state.currentCourse = course;
+  // Nothing is open yet in this course; an item left over from the previous course would otherwise
+  // reappear (with its breadcrumbs) when switching sidebar tabs
+  state.currentItem = null;
+  state.currentSection = null;
   state.courseChatHistory = [];
+  renderCourseChatMessages(); // Clear the previous course's conversation from the panel
   
   const chatPanel = document.getElementById('course-chat-panel');
   if (chatPanel) chatPanel.style.display = 'none';
@@ -599,9 +627,11 @@ function openCourse(courseId, restoreItemPath = null) {
     }
   }
 
-  // Set breadcrumbs initial
+  // Set breadcrumbs initial (a restored item has already set its own section crumb)
   document.getElementById('crumb-course').textContent = 'Dashboard';
-  document.getElementById('crumb-section').textContent = course.title;
+  if (!state.currentItem) {
+    document.getElementById('crumb-section').textContent = course.title;
+  }
   if (storedTab !== 'course-summary' && !restoreItemPath) {
     document.getElementById('crumb-item').textContent = '';
     document.getElementById('crumb-item').classList.remove('active');
@@ -647,7 +677,7 @@ function renderCourseOutline() {
     trigger.innerHTML = `
       <div class="section-title-wrapper">
         ${sectionIconSVG}
-        <span class="section-title-text" title="${section.name}">${section.name}</span>
+        <span class="section-title-text" title="${escapeHtml(section.name)}">${escapeHtml(section.name)}</span>
       </div>
       <svg class="section-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
     `;
@@ -663,7 +693,7 @@ function renderCourseOutline() {
       if (state.currentItem && state.currentItem.path === item.path) {
         itemRow.classList.add('active');
       }
-      itemRow.id = `item-row-${item.name.replace(/\s+/g, '_')}`;
+      itemRow.dataset.path = item.path;
       
       // Determine file icon
       let typeIcon = '';
@@ -687,13 +717,15 @@ function renderCourseOutline() {
       }
 
       itemRow.innerHTML = `
-        <div class="item-check-checkbox ${checkedClass}" onclick="toggleItemComplete(event, '${item.path}')">
+        <div class="item-check-checkbox ${checkedClass}">
           <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           <svg class="skip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
         </div>
         ${typeIcon}
-        <span class="outline-item-name" title="${item.name}">${item.name}</span>
+        <span class="outline-item-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
       `;
+      // Bound in JS: an inline onclick string breaks on paths containing quotes (e.g. "What's Next.mp4")
+      itemRow.querySelector('.item-check-checkbox').addEventListener('click', (e) => toggleItemComplete(e, item.path));
 
       // Entire row click (except checking) selects the item to view
       itemRow.addEventListener('click', (e) => {
@@ -749,7 +781,7 @@ function renderCourseResources() {
     trigger.innerHTML = `
       <div class="section-title-wrapper">
         ${sectionIconSVG}
-        <span class="section-title-text" title="${section.name}">${section.name}</span>
+        <span class="section-title-text" title="${escapeHtml(section.name)}">${escapeHtml(section.name)}</span>
       </div>
       <svg class="section-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
     `;
@@ -765,7 +797,7 @@ function renderCourseResources() {
       if (state.currentItem && state.currentItem.path === item.path) {
         itemRow.classList.add('active');
       }
-      itemRow.id = `item-row-${item.name.replace(/\s+/g, '_')}`;
+      itemRow.dataset.path = item.path;
       
       // Determine file icon
       let typeIcon = '';
@@ -785,13 +817,14 @@ function renderCourseResources() {
       }
 
       itemRow.innerHTML = `
-        <div class="item-check-checkbox ${checkedClass}" onclick="toggleItemComplete(event, '${item.path}')">
+        <div class="item-check-checkbox ${checkedClass}">
           <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           <svg class="skip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
         </div>
         ${typeIcon}
-        <span class="outline-item-name" title="${item.name}">${item.name}</span>
+        <span class="outline-item-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
       `;
+      itemRow.querySelector('.item-check-checkbox').addEventListener('click', (e) => toggleItemComplete(e, item.path));
 
       // Entire row click selects the item to view
       itemRow.addEventListener('click', (e) => {
@@ -949,10 +982,12 @@ function selectItem(item, section = null) {
   }
   cancelAutoplay();
 
-  // Pause video player if it exists and is playing
+  // Pause video player if it exists and is playing, saving its position now: loading the next video
+  // drops the queued pause event
   const mainVideo = document.getElementById('main-video-player');
   if (mainVideo && !mainVideo.paused) {
     mainVideo.pause();
+    saveVideoProgress(true);
   }
 
   state.currentItem = item;
@@ -968,12 +1003,10 @@ function selectItem(item, section = null) {
     });
   }
 
-  // Active state class toggle in outline
+  // Active state class toggle in outline (matched by path, since file names repeat across sections)
   document.querySelectorAll('.outline-item').forEach(el => {
-    el.classList.remove('active');
+    el.classList.toggle('active', el.dataset.path === item.path);
   });
-  const activeRow = document.getElementById(`item-row-${item.name.replace(/\s+/g, '_')}`);
-  if (activeRow) activeRow.classList.add('active');
 
   // Load breadcrumbs
   document.getElementById('crumb-section').textContent = state.currentSection.name;
@@ -1081,6 +1114,7 @@ function initVideoPlayerEvents() {
 
   video.addEventListener('play', () => {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+    cancelAutoplay(); // Replaying after the end shouldn't jump to the next lesson mid-video
     startProgressInterval();
     
     // Auto collapse sidebar when video is playing
@@ -1125,7 +1159,10 @@ function initVideoPlayerEvents() {
       state.pendingSeekTime = null;
       video.play().catch(e => console.log("Play failed:", e));
     } else if (state.currentItem && state.currentItem.progress && state.currentItem.progress.currentTime) {
-      video.currentTime = state.currentItem.progress.currentTime;
+      // If the video has already been completed, start it from the beginning (0) so the user can watch it again
+      // instead of immediately triggering the ended event and auto-advancing/skipping.
+      const isCompleted = state.currentItem.progress.completed;
+      video.currentTime = isCompleted ? 0 : state.currentItem.progress.currentTime;
     }
   });
 
@@ -1155,6 +1192,8 @@ function initVideoPlayerEvents() {
 
 function loadVideoPlayer(item) {
   const video = document.getElementById('main-video-player');
+  // Remember which item the player holds: its pause event can fire after another item is selected
+  state.videoItem = item;
   
   // Clear tracks and sources
   video.innerHTML = '';
@@ -1248,11 +1287,14 @@ async function togglePictureInPicture() {
 
 function initKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
-    // Ignore when typing in input/textarea/contenteditable fields
-    if (document.activeElement && (
-      document.activeElement.tagName === 'INPUT' ||
-      document.activeElement.tagName === 'TEXTAREA' ||
-      document.activeElement.isContentEditable
+    // Ignore when typing in input/textarea/contenteditable fields. Sliders and checkboxes don't count:
+    // the seek and volume sliders keep focus after use, which would otherwise disable every shortcut
+    const active = document.activeElement;
+    if (active && (
+      (active.tagName === 'INPUT' && !['range', 'checkbox', 'radio', 'button'].includes(active.type)) ||
+      active.tagName === 'TEXTAREA' ||
+      active.tagName === 'SELECT' ||
+      active.isContentEditable
     )) {
       return;
     }
@@ -1373,7 +1415,10 @@ function toggleFullscreen() {
 // Send progress update to backend
 async function saveVideoProgress(force = false, isCompleted = false) {
   const video = document.getElementById('main-video-player');
-  if (!video.duration || !state.currentItem) return;
+  // Save against the video's own item, not state.currentItem: the selection may already have moved
+  // to another item (e.g. a PDF) when this runs, or while the request is in flight
+  const item = state.videoItem;
+  if (!video.duration || !item) return;
 
   const now = video.currentTime;
   const timeDiff = Math.abs(now - state.lastSavedTime);
@@ -1387,7 +1432,7 @@ async function saveVideoProgress(force = false, isCompleted = false) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          filePath: state.currentItem.path,
+          filePath: item.path,
           currentTime: now,
           duration: video.duration,
           completed: isCompleted ? true : undefined
@@ -1396,10 +1441,10 @@ async function saveVideoProgress(force = false, isCompleted = false) {
       const data = await res.json();
       
       // Sync local courses progress values
-      syncCourseProgressMap(state.currentItem.path, data);
+      syncCourseProgressMap(item.path, data);
 
       // Update item progress model locally
-      state.currentItem.progress = data;
+      item.progress = data;
 
       // Update the header action button state
       updateHeaderActionBtn();
@@ -1590,6 +1635,7 @@ async function toggleItemComplete(event, path) {
 
   const isNowCompleted = !(matchedItem.progress && matchedItem.progress.completed);
   const success = await saveCompletedState(matchedItem, isNowCompleted);
+  updateHeaderActionBtn(); // Keep the header's Mark Complete button in sync when this is the open item
 
   // If completed and it is the current item, auto-advance to next item
   if (success && isNowCompleted && state.currentItem && matchedItem.path === state.currentItem.path) {
@@ -1691,10 +1737,12 @@ async function saveCompletedState(item, completed) {
 function getFlatItemsList() {
   const list = [];
   if (!state.currentCourse || !state.currentCourse.sections) return list;
-  const activeTab = state.currentWorkspaceTab || 'lessons';
-  const allowedTypes = activeTab === 'lessons'
-    ? ['video', 'pdf', 'html', 'text']
-    : ['image', 'code', 'other'];
+  // Step through the open item's own list (lessons or resources), whichever sidebar tab is showing:
+  // keying this off the tab broke Next/autoplay while browsing Resources or after resuming onto Summary
+  const isLesson = state.currentItem
+    ? LESSON_TYPES.includes(state.currentItem.type)
+    : state.currentWorkspaceTab !== 'resources';
+  const allowedTypes = isLesson ? LESSON_TYPES : ['image', 'code', 'other'];
 
   state.currentCourse.sections.forEach(sec => {
     sec.items.forEach(item => {
@@ -1733,6 +1781,7 @@ function triggerAutoplayCountdown() {
   
   if (index !== -1 && index < flat.length - 1) {
     const nextItem = flat[index + 1];
+    cancelAutoplay(); // Never leave an earlier countdown running where it can't be cancelled
     
     const overlay = document.getElementById('autoplay-overlay');
     const countdown = document.getElementById('autoplay-countdown');
@@ -1817,13 +1866,14 @@ function renderSettings() {
     state.config.folders.forEach(folder => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${folder}</td>
+        <td>${escapeHtml(folder)}</td>
         <td style="text-align:right;">
-          <button class="table-action-btn" onclick="removeFolder('${folder.replace(/'/g, "\\'")}')" title="Delete watched folder">
+          <button class="table-action-btn" title="Delete watched folder">
             <svg class="table-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </td>
       `;
+      tr.querySelector('.table-action-btn').addEventListener('click', () => removeFolder(folder));
       tableBody.appendChild(tr);
     });
   }
@@ -2183,6 +2233,9 @@ async function loadVideoMetadata(item) {
     if (!res.ok) throw new Error('Failed to load video metadata');
     
     const data = await res.json();
+    // The user may have moved on while this loaded: don't show this item's notes (or auto-generate
+    // notes, which targets the current item) under a different lesson
+    if (!state.currentItem || state.currentItem.path !== item.path) return;
     if (data.hasTranscript && data.transcript.trim()) {
       transcriptBody.textContent = data.transcript;
     } else {
@@ -2234,6 +2287,7 @@ async function loadVideoMetadata(item) {
     }
   } catch (err) {
     console.error('Error loading video metadata:', err);
+    if (!state.currentItem || state.currentItem.path !== item.path) return;
     transcriptBody.innerHTML = `<p class="empty-pane-msg">Error loading ${isVideo ? 'transcript' : 'extracted text'}.</p>`;
     summaryBody.innerHTML = '<p class="empty-pane-msg">Error loading summary.</p>';
   }
@@ -2415,8 +2469,8 @@ function parseMarkdown(md) {
     return placeholder;
   });
 
-  // Extract inline math $...$
-  processedMd = processedMd.replace(/\$((?!\s)(?:[^\$\\]|\\.)+?)(?<!\s)\$/g, (match, math) => {
+  // Extract inline math $...$ (a closing $ followed by a digit is currency, as in "$3,500–$4,000")
+  processedMd = processedMd.replace(/\$((?!\s)(?:[^\$\\]|\\.)+?)(?<!\s)\$(?!\d)/g, (match, math) => {
     const placeholder = `@@MATH_BLOCK_${placeholderCount++}@@`;
     placeholders.push({ placeholder, math, displayMode: false, raw: match });
     return placeholder;
@@ -2733,7 +2787,7 @@ async function loadCourseSummary() {
     } else if (data.status === 'failed') {
       contentArea.innerHTML = `
         <div class="empty-pane-msg" style="text-align: center; padding: 40px 0; color: var(--color-danger);">
-          <p>Previous generation failed: ${data.error || 'Unknown error'}</p>
+          <p>Previous generation failed: ${escapeHtml(data.error || 'Unknown error')}</p>
           <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Click below to retry.</p>
         </div>
       `;
@@ -2904,9 +2958,10 @@ async function sendChatMessage() {
   const messageText = inputEl.value.trim();
   if (!messageText) return;
 
-  await executeChatMessage(messageText);
+  // Clear the box right away, so the question can't be sent twice while the answer is pending
   inputEl.value = '';
   inputEl.style.height = 'auto';
+  await executeChatMessage(messageText);
 }
 
 async function sendQuickQuestion(text) {
@@ -2927,8 +2982,10 @@ async function executeChatMessage(messageText) {
     return;
   }
 
-  // Push user message
-  state.chatHistory.push({ role: 'user', content: messageText });
+  // Push user message. Keep a handle on this conversation: opening another item starts a new one,
+  // and a late answer must not be appended to it
+  const history = state.chatHistory;
+  history.push({ role: 'user', content: messageText });
   renderChatMessages();
 
   // Show typing indicator
@@ -2951,12 +3008,11 @@ async function executeChatMessage(messageText) {
       body: JSON.stringify({
         path: state.currentItem.path,
         message: messageText,
-        history: state.chatHistory.slice(0, -1)
+        history: history.slice(0, -1)
       })
     });
 
-    const indicatorEl = document.getElementById('chat-typing-indicator');
-    if (indicatorEl) indicatorEl.remove();
+    indicator.remove();
 
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
@@ -2964,14 +3020,15 @@ async function executeChatMessage(messageText) {
     }
 
     const data = await res.json();
-    state.chatHistory.push({ role: 'model', content: data.response });
+    if (state.chatHistory !== history) return;
+    history.push({ role: 'model', content: data.response });
     renderChatMessages();
   } catch (err) {
     console.error('Chat failed:', err);
-    const indicatorEl = document.getElementById('chat-typing-indicator');
-    if (indicatorEl) indicatorEl.remove();
+    indicator.remove();
+    if (state.chatHistory !== history) return;
 
-    state.chatHistory.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
+    history.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
     renderChatMessages();
     
     const lastMsgEl = messagesBody.lastElementChild;
@@ -3032,9 +3089,10 @@ async function sendCourseChatMessage() {
   const messageText = inputEl.value.trim();
   if (!messageText) return;
 
-  await executeCourseChatMessage(messageText);
+  // Clear the box right away, so the question can't be sent twice while the answer is pending
   inputEl.value = '';
   inputEl.style.height = 'auto';
+  await executeCourseChatMessage(messageText);
 }
 
 async function sendCourseQuickQuestion(text) {
@@ -3054,8 +3112,9 @@ async function executeCourseChatMessage(messageText) {
     return;
   }
 
-  // Push user message
-  state.courseChatHistory.push({ role: 'user', content: messageText });
+  // Push user message (opening another course starts a new conversation; see executeChatMessage)
+  const history = state.courseChatHistory;
+  history.push({ role: 'user', content: messageText });
   renderCourseChatMessages();
 
   // Show typing indicator
@@ -3078,12 +3137,11 @@ async function executeCourseChatMessage(messageText) {
       body: JSON.stringify({
         courseId: state.currentCourse.id,
         message: messageText,
-        history: state.courseChatHistory.slice(0, -1)
+        history: history.slice(0, -1)
       })
     });
 
-    const indicatorEl = document.getElementById('course-chat-typing-indicator');
-    if (indicatorEl) indicatorEl.remove();
+    indicator.remove();
 
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
@@ -3091,14 +3149,15 @@ async function executeCourseChatMessage(messageText) {
     }
 
     const data = await res.json();
-    state.courseChatHistory.push({ role: 'model', content: data.response });
+    if (state.courseChatHistory !== history) return;
+    history.push({ role: 'model', content: data.response });
     renderCourseChatMessages();
   } catch (err) {
     console.error('Course chat failed:', err);
-    const indicatorEl = document.getElementById('course-chat-typing-indicator');
-    if (indicatorEl) indicatorEl.remove();
+    indicator.remove();
+    if (state.courseChatHistory !== history) return;
 
-    state.courseChatHistory.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
+    history.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
     renderCourseChatMessages();
     
     const lastMsgEl = messagesBody.lastElementChild;

@@ -14,7 +14,6 @@
     "modal:deploy": "modal deploy modal_transcriber.py"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.19.2",
     "modal": "^0.11.1",
     "pdf-parse": "^2.4.5"
@@ -25,5 +24,15 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "db.json"
+    ]
+  },
+  "jest": {
+    "modulePathIgnorePatterns": [
+      "<rootDir>/.claude/"
+    ]
   }
 }

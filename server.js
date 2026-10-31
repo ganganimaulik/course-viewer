@@ -2,8 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const cors = require('cors');
-const { exec, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const { ModalClient, NotFoundError, TimeoutError } = require('modal');
 const { PDFParse } = require('pdf-parse');
 
@@ -15,7 +14,10 @@ async function pdfParse(dataBuffer) {
 
 const app = express();
 const PORT = process.env.PORT || 3005;
-const DB_FILE = path.join(__dirname, 'db.json');
+// Loopback only: the API reads files and starts paid AI jobs, so other machines must not reach it
+const HOST = '127.0.0.1';
+// COURSE_VIEWER_DB lets tests use a throwaway database
+const DB_FILE = process.env.COURSE_VIEWER_DB || path.join(__dirname, 'db.json');
 const ENV_FILE = path.join(__dirname, '.env');
 
 // Load API credentials (FIREWORKS_API_KEY, optional MODAL_TOKEN_ID / MODAL_TOKEN_SECRET) from .env
@@ -36,8 +38,24 @@ const IGNORE_DIRS = ['node_modules', 'dist', 'build', '.git', 'venv', '.env', 'e
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif'];
 const CODE_EXTENSIONS = ['.js', '.py', '.sh', '.json', '.css', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.yaml', '.yml', '.xml', '.sql', '.ini', '.conf'];
 
-app.use(cors());
-app.use(express.json());
+// Only this machine's own pages may use the API. There are no CORS headers, so other sites can't read
+// responses; on top of that:
+// - the Host must be local, or a DNS-rebinding page on another domain could pass as same-origin
+// - changes must come from the app's origin: a cross-site form or no-cors POST still reaches a local
+//   server (it just can't read the reply), e.g. to wipe all progress
+const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1'];
+app.use((req, res, next) => {
+  if (!LOCAL_HOSTNAMES.includes(req.hostname)) {
+    return res.status(403).send('Forbidden host');
+  }
+  const origin = req.headers.origin;
+  if (origin && !['GET', 'HEAD'].includes(req.method) && origin !== `${req.protocol}://${req.headers.host}`) {
+    return res.status(403).send('Cross-site request blocked');
+  }
+  next();
+});
+// Course summary file lists and long chat histories easily exceed the default 100kb body limit
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize Database
@@ -64,6 +82,14 @@ if (fs.existsSync(DB_FILE)) {
     }
   } catch (err) {
     console.error('Error reading db.json, creating new one', err);
+    // Keep a copy of the unreadable file, since the next save replaces it
+    const backupFile = `${DB_FILE}.corrupt-${Date.now()}`;
+    try {
+      fs.copyFileSync(DB_FILE, backupFile);
+      console.error(`Saved a copy of the unreadable db.json to ${backupFile}`);
+    } catch (copyErr) {
+      console.error('Error backing up db.json', copyErr);
+    }
   }
 } else {
   saveDb();
@@ -71,10 +97,65 @@ if (fs.existsSync(DB_FILE)) {
 
 function saveDb() {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+    // Write a temp file and rename it over db.json, so a crash mid-write can't leave a truncated file
+    const tmpFile = `${DB_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
+    fs.renameSync(tmpFile, DB_FILE);
   } catch (err) {
     console.error('Error saving db.json', err);
   }
+}
+
+// The "Downloads - <folder>" course is a watched folder itself: it holds only the folder's top-level files,
+// while the folder's other courses sit in its subfolders
+function isLooseFilesCourse(coursePath) {
+  return (db.folders || []).includes(coursePath);
+}
+
+// The API only reads, streams, or opens paths inside the watched folders. Symlinks and ".." are resolved
+// first, so neither can point a request at files elsewhere on disk.
+function isInWatchedFolder(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false;
+  let realPath;
+  try {
+    realPath = fs.realpathSync(filePath);
+  } catch (err) {
+    return false; // Missing paths can't be served anyway
+  }
+  return (db.folders || []).some((folder) => {
+    try {
+      const root = fs.realpathSync(folder);
+      return realPath === root || realPath.startsWith(root + path.sep);
+    } catch (err) {
+      return false; // The watched folder itself is missing (e.g. an unplugged drive)
+    }
+  });
+}
+
+const OUTSIDE_WATCHED_FOLDERS = 'Path is outside the watched folders';
+
+// Stat a path, returning null unless it is a regular file (missing paths and directories can't be streamed)
+function statFile(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return stat.isFile() ? stat : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Pipe a file to the response. Read errors need a handler: an unhandled stream 'error' event crashes the server.
+function pipeFile(res, filePath, options) {
+  const stream = fs.createReadStream(filePath, options);
+  stream.on('error', (err) => {
+    console.error(`Error streaming ${filePath}:`, err);
+    if (res.headersSent) {
+      res.destroy(err);
+    } else {
+      res.status(500).send('Error reading file');
+    }
+  });
+  stream.pipe(res);
 }
 
 // Convert SRT Subtitles to VTT on the fly
@@ -426,11 +507,15 @@ app.post('/api/courses/reset', (req, res) => {
 
   // Find all progress entries that are inside the course path
   // Since db.progress keys are absolute file paths, we check if key is identical or starts with coursePath + separator
+  // (only direct children for a loose-files course, whose subfolders are other courses)
+  const looseFiles = isLooseFilesCourse(coursePath);
   const keys = Object.keys(db.progress);
   let count = 0;
   for (const filePath of keys) {
     const isSame = filePath === coursePath;
-    const isInside = filePath.startsWith(coursePath + path.sep);
+    const isInside = looseFiles
+      ? path.dirname(filePath) === coursePath
+      : filePath.startsWith(coursePath + path.sep);
     if (isSame || isInside) {
       delete db.progress[filePath];
       count++;
@@ -496,8 +581,12 @@ app.get('/api/video', (req, res) => {
   if (!filePath) {
     return res.status(400).send('Path is required');
   }
-  if (!fs.existsSync(filePath)) {
+  const stat = statFile(filePath);
+  if (!stat) {
     return res.status(404).send('File not found');
+  }
+  if (!isInWatchedFolder(filePath)) {
+    return res.status(403).send(OUTSIDE_WATCHED_FOLDERS);
   }
 
   const ext = path.extname(filePath).toLowerCase();
@@ -505,7 +594,6 @@ app.get('/api/video', (req, res) => {
     return res.status(403).send('Forbidden file type');
   }
 
-  const stat = fs.statSync(filePath);
   const fileSize = stat.size;
   const range = req.headers.range;
 
@@ -517,16 +605,21 @@ app.get('/api/video', (req, res) => {
 
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    let start = parseInt(parts[0], 10);
+    // Clamp the end to the file, since clients may ask for more bytes than it has
+    let end = parts[1] ? Math.min(parseInt(parts[1], 10), fileSize - 1) : fileSize - 1;
+    if (isNaN(start) && parts[1]) {
+      // Suffix range: "bytes=-500" asks for the last 500 bytes
+      start = Math.max(0, fileSize - parseInt(parts[1], 10));
+      end = fileSize - 1;
+    }
 
-    if (start >= fileSize) {
-      res.status(416).send('Requested range not satisfiable\n' + start + ' >= ' + fileSize);
+    if (isNaN(start) || isNaN(end) || start >= fileSize || start > end) {
+      res.status(416).set('Content-Range', `bytes */${fileSize}`).send('Requested range not satisfiable');
       return;
     }
 
     const chunksize = (end - start) + 1;
-    const file = fs.createReadStream(filePath, { start, end });
     const head = {
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges': 'bytes',
@@ -535,14 +628,14 @@ app.get('/api/video', (req, res) => {
     };
 
     res.writeHead(206, head);
-    file.pipe(res);
+    pipeFile(res, filePath, { start, end });
   } else {
     const head = {
       'Content-Length': fileSize,
       'Content-Type': contentType,
     };
     res.writeHead(200, head);
-    fs.createReadStream(filePath).pipe(res);
+    pipeFile(res, filePath);
   }
 });
 
@@ -552,14 +645,17 @@ app.get('/api/subtitle', (req, res) => {
   if (!filePath) {
     return res.status(400).send('Path is required');
   }
-  if (!fs.existsSync(filePath)) {
+  if (!statFile(filePath)) {
     return res.status(404).send('File not found');
+  }
+  if (!isInWatchedFolder(filePath)) {
+    return res.status(403).send(OUTSIDE_WATCHED_FOLDERS);
   }
 
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.vtt') {
     res.setHeader('Content-Type', 'text/vtt');
-    fs.createReadStream(filePath).pipe(res);
+    pipeFile(res, filePath);
   } else if (ext === '.srt') {
     try {
       const srtContent = fs.readFileSync(filePath, 'utf8');
@@ -581,8 +677,11 @@ app.get('/api/file', (req, res) => {
   if (!filePath) {
     return res.status(400).send('Path is required');
   }
-  if (!fs.existsSync(filePath)) {
+  if (!statFile(filePath)) {
     return res.status(404).send('File not found');
+  }
+  if (!isInWatchedFolder(filePath)) {
+    return res.status(403).send(OUTSIDE_WATCHED_FOLDERS);
   }
 
   const ext = path.extname(filePath).toLowerCase();
@@ -605,18 +704,18 @@ app.get('/api/file', (req, res) => {
   }
 
   res.setHeader('Content-Type', contentType);
-  fs.createReadStream(filePath).pipe(res);
+  pipeFile(res, filePath);
 });
 
 // Reveal file in Mac Finder
 app.post('/api/open-in-finder', (req, res) => {
   const filePath = req.body.path;
-  if (!filePath || !fs.existsSync(filePath)) {
+  if (!filePath || !fs.existsSync(filePath) || !isInWatchedFolder(filePath)) {
     return res.status(400).send('Invalid path');
   }
 
-  const escapedPath = filePath.replace(/"/g, '\\"');
-  exec(`open -R "${escapedPath}"`, (err) => {
+  // execFile passes the path as one argument, so no shell expands characters like $ or ` in file names
+  execFile('open', ['-R', filePath], (err) => {
     if (err) {
       console.error(err);
       return res.status(500).send('Failed to open in Finder');
@@ -628,12 +727,11 @@ app.post('/api/open-in-finder', (req, res) => {
 // Open file with default application on Mac
 app.post('/api/open-in-system', (req, res) => {
   const filePath = req.body.path;
-  if (!filePath || !fs.existsSync(filePath)) {
+  if (!filePath || !fs.existsSync(filePath) || !isInWatchedFolder(filePath)) {
     return res.status(400).send('Invalid path');
   }
 
-  const escapedPath = filePath.replace(/"/g, '\\"');
-  exec(`open "${escapedPath}"`, (err) => {
+  execFile('open', [filePath], (err) => {
     if (err) {
       console.error(err);
       return res.status(500).send('Failed to open file in default app');
@@ -664,7 +762,7 @@ function getLlmModel() {
   return (db.aiConfig && db.aiConfig.llmModel) || DEFAULT_LLM_MODEL;
 }
 
-// Never include secrets here: the API is reachable from any origin (cors())
+// Never include secrets here: this is sent to the browser
 function getAiConfigStatus() {
   return {
     llmModel: getLlmModel(),
@@ -692,7 +790,7 @@ app.post('/api/ai-config', (req, res) => {
 
 app.get('/api/video/metadata', (req, res) => {
   const videoPath = req.query.path;
-  if (!videoPath || !fs.existsSync(videoPath)) {
+  if (!videoPath || !fs.existsSync(videoPath) || !isInWatchedFolder(videoPath)) {
     return res.status(400).send('Invalid file path');
   }
 
@@ -1421,7 +1519,7 @@ const summaryQueue = [];
 let queueIsProcessing = false;
 
 function addToSummaryQueue(filePath) {
-  if (summaryQueue.includes(filePath)) return;
+  if (summaryQueue.includes(filePath) || activeGenerations.has(filePath)) return;
   summaryQueue.push(filePath);
   processSummaryQueue();
 }
@@ -1432,6 +1530,9 @@ async function processSummaryQueue() {
 
   while (summaryQueue.length > 0) {
     const nextPath = summaryQueue.shift();
+    // Skip files whose notes were generated after they were queued (e.g. the user opened that lesson)
+    const ext = path.extname(nextPath);
+    if (fs.existsSync(nextPath.slice(0, -ext.length) + '.summary.md')) continue;
     console.log(`[Queue] Processing background summary for: ${nextPath}`);
     try {
       await generateSummaryForPath(nextPath);
@@ -1557,7 +1658,7 @@ async function generateSummaryForPath(filePath) {
 // --- SINGLE VIDEO NOTES GENERATION ENDPOINT ---
 app.post('/api/video/generate-transcript', async (req, res) => {
   const videoPath = req.body.path;
-  if (!videoPath || !fs.existsSync(videoPath)) {
+  if (!videoPath || !fs.existsSync(videoPath) || !isInWatchedFolder(videoPath)) {
     return res.status(400).send({ error: 'Invalid file path' });
   }
 
@@ -1583,7 +1684,7 @@ app.post('/api/video/pregenerate-summaries', (req, res) => {
 
   const queued = [];
   for (const filePath of paths) {
-    if (!filePath || !fs.existsSync(filePath)) continue;
+    if (!filePath || !fs.existsSync(filePath) || !isInWatchedFolder(filePath)) continue;
 
     // Check if summary already exists
     const ext = path.extname(filePath).toLowerCase();
@@ -1603,7 +1704,7 @@ app.post('/api/video/pregenerate-summaries', (req, res) => {
 // Chat with video transcript endpoint
 app.post('/api/video/chat', async (req, res) => {
   const { path: videoPath, message, history } = req.body;
-  if (!videoPath || !fs.existsSync(videoPath)) {
+  if (!videoPath || !fs.existsSync(videoPath) || !isInWatchedFolder(videoPath)) {
     return res.status(400).send({ error: 'Invalid file path' });
   }
   if (!message) {
@@ -1685,6 +1786,9 @@ app.post('/api/course/chat', async (req, res) => {
   if (!fs.existsSync(coursePath)) {
     return res.status(400).send({ error: 'Course path does not exist on disk' });
   }
+  if (!isInWatchedFolder(coursePath)) {
+    return res.status(403).send({ error: OUTSIDE_WATCHED_FOLDERS });
+  }
 
   if (!isLlmConfigured()) {
     return res.status(400).send({ error: FIREWORKS_KEY_MISSING });
@@ -1698,13 +1802,15 @@ app.post('/api/course/chat', async (req, res) => {
       contextText = fs.readFileSync(summaryFilePath, 'utf8');
     } else {
       // Fallback: search for all generated transcripts and summaries in the course
+      // (a loose-files course doesn't descend into subfolders, which hold other courses)
       const transcripts = [];
+      const looseFiles = isLooseFilesCourse(coursePath);
       const traverseForContext = (dir) => {
         const items = fs.readdirSync(dir, { withFileTypes: true });
         for (const item of items) {
           const fullPath = path.join(dir, item.name);
           if (item.isDirectory()) {
-            if (!IGNORE_DIRS.includes(item.name.toLowerCase())) {
+            if (!looseFiles && !IGNORE_DIRS.includes(item.name.toLowerCase())) {
               traverseForContext(fullPath);
             }
           } else if (item.isFile()) {
@@ -1794,6 +1900,9 @@ app.post('/api/course/generate-summary', (req, res) => {
   if (!fs.existsSync(coursePath)) {
     return res.status(400).send({ error: 'Course path does not exist on disk' });
   }
+  if (!isInWatchedFolder(coursePath)) {
+    return res.status(403).send({ error: OUTSIDE_WATCHED_FOLDERS });
+  }
 
   // If already processing, return status
   if (activeJobs[courseId] && activeJobs[courseId].status === 'processing') {
@@ -1831,6 +1940,9 @@ app.get('/api/course/summary-status', (req, res) => {
   } catch (err) {
     return res.status(400).send({ error: 'Invalid courseId' });
   }
+  if (!isInWatchedFolder(coursePath)) {
+    return res.status(403).send({ error: OUTSIDE_WATCHED_FOLDERS });
+  }
 
   const summaryFilePath = path.join(coursePath, 'course.summary.md');
   const hasSummaryOnDisk = fs.existsSync(summaryFilePath);
@@ -1861,7 +1973,7 @@ app.get('/api/course/summary-status', (req, res) => {
 
 // Start Server
 if (require.main === module) {
-  app.listen(PORT, () => {
+  app.listen(PORT, HOST, () => {
     console.log(`Course Viewer server running on http://localhost:${PORT}`);
   });
 }
