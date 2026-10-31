@@ -8,9 +8,9 @@ Welcome, AI Agent! This guide outlines the architecture, data models, APIs, and 
 This application is a local course player and progress tracker. It recursively scans local directories for downloaded courses (videos, PDFs, HTML articles, text, markdown, etc.) and lists them on a modern glassmorphic dashboard.
 
 It consists of two main components:
-1. **Express Backend (`server.js`)**: A Node.js server running on port `3005` by default (see PM2 config `ecosystem.config.js`). It scans folders, hosts REST API endpoints, streams media, and communicates with Google Cloud Platform APIs for Speech-to-Text and Gemini AI models.
+1. **Express Backend (`server.js`)**: A Node.js server running on port `3005` by default (see PM2 config `ecosystem.config.js`). It scans folders, hosts REST API endpoints, streams media, calls Fireworks AI for LLM features (notes, summaries, chat), and calls a Whisper transcription app deployed on Modal.
 2. **SPA Frontend (`public/`)**: A Single Page Application using vanilla HTML5, CSS3, and JavaScript:
-   - [index.html](file:///Users/maulik/Documents/GitHub/course-viewer/public/index.html): Layout, sidebar, tabs, viewers (Video, PDF, HTML iframe, Markdown/Code), GCP settings form, and chatbot drawer.
+   - [index.html](file:///Users/maulik/Documents/GitHub/course-viewer/public/index.html): Layout, sidebar, tabs, viewers (Video, PDF, HTML iframe, Markdown/Code), AI services settings, and chatbot drawer.
    - [style.css](file:///Users/maulik/Documents/GitHub/course-viewer/public/style.css): Modern, premium glassmorphic dark-theme design system.
    - [app.js](file:///Users/maulik/Documents/GitHub/course-viewer/public/app.js): Application state, SPA view routing, API calls, event handlers, keyboard shortcuts, transcript/chat workflows, and media controls.
 
@@ -36,15 +36,12 @@ The application saves config and progress state in a local JSON database: [db.js
       "duration": 124.5
     }
   },
-  "gcpConfig": {
-    "projectId": "gcp-project-id",
-    "bucketName": "gcs-bucket-name",
-    "location": "global",
-    "speechLocation": "us-central1"
+  "aiConfig": {
+    "llmModel": "accounts/fireworks/models/deepseek-v4p1-flash-1017"
   }
 }
 ```
-*Note: Write modifications to `db` using `saveDb()` in `server.js` to serialize state.*
+*Note: Write modifications to `db` using `saveDb()` in `server.js` to serialize state. An empty `llmModel` means the default Fireworks model. API keys are never stored in `db.json`.*
 
 ---
 
@@ -55,8 +52,8 @@ The Express app exposes the following APIs:
 - `GET /api/config`: Returns the list of watched directories.
 - `POST /api/config` `{ path: "/path" }`: Validates and adds a watched directory.
 - `POST /api/config/remove` `{ path: "/path" }`: Removes a directory from watches.
-- `GET /api/gcp-config`: Returns GCP config settings.
-- `POST /api/gcp-config`: Saves GCP settings (`projectId`, `bucketName`, `location`, `speechLocation`).
+- `GET /api/ai-config`: Returns the Fireworks model plus whether Fireworks AI and Modal credentials are configured (never the keys themselves).
+- `POST /api/ai-config` `{ llmModel }`: Saves the Fireworks model ID (empty = default).
 
 ### Courses & Lessons
 - `GET /api/courses`: Scans configured folders and returns a list of parsed courses containing sections, items, and merged progress. Sorted by `lastStudied` (most recent first) then alphabetical.
@@ -75,17 +72,25 @@ The Express app exposes the following APIs:
 - `POST /api/open-in-finder` `{ path }`: Opens Finder with the target file highlighted (`open -R`).
 - `POST /api/open-in-system` `{ path }`: Opens the file in its default macOS app (`open`).
 
-### GCP & AI Features
+### AI Features
 - `GET /api/video/metadata?path=<path>`: Gets transcript (from `<video>.transcript.txt`) and summary (from `<video>.summary.md`) if they exist.
-- `POST /api/video/generate-transcript` `{ videoPath }`: Runs Speech-to-Text transcription.
-- `POST /api/video/chat` `{ videoPath, prompt, chatHistory }`: Uses Gemini model to chat about a video's transcript.
-- `POST /api/course/chat` `{ courseId, prompt, chatHistory }`: Chatbot for the entire course context.
+- `POST /api/video/generate-transcript` `{ path }`: Builds the transcript (existing file, subtitles, extracted document text, or Whisper transcription on Modal for videos) and summarizes it with Fireworks AI.
+- `POST /api/video/pregenerate-summaries` `{ paths }`: Queues background summary generation for neighboring lessons.
+- `POST /api/video/chat` `{ path, message, history }`: Uses the Fireworks model to chat about a lesson's transcript.
+- `POST /api/course/chat` `{ courseId, message, history }`: Chatbot for the entire course context.
 - `POST /api/course/generate-summary` `{ courseId, force }`: Triggers course summarization.
 - `GET /api/course/summary-status?courseId=<id>`: Checks status of summary generation.
 
 ---
 
-## 4. Coding Conventions & Guidelines
+## 4. AI Services (Fireworks AI & Modal)
+- **LLM (Fireworks AI)**: `generateWithFireworks()` in `server.js` streams chat completions from Fireworks' OpenAI-compatible API. It needs `FIREWORKS_API_KEY`, which `server.js` loads from `.env` at startup (see `.env.example`). The model defaults to `DEFAULT_LLM_MODEL` and can be changed in Settings.
+- **Transcription (Modal)**: `modal_transcriber.py` defines the `course-viewer-transcriber` Modal app (Whisper large-v3-turbo via faster-whisper on a GPU). `transcribeVideoWithModal()` extracts a mono Opus track with `ffmpeg`, calls `Transcriber.transcribe` through the Modal JS SDK (`modal` npm package), and formats the returned segments as `[MM:SS]` paragraphs.
+- Modal credentials come from `~/.modal.toml` (written by `modal token set`) or `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`. Redeploy the app with `npm run modal:deploy` after editing `modal_transcriber.py`.
+
+---
+
+## 5. Coding Conventions & Guidelines
 
 ### Backend (`server.js`)
 - Do not split `server.js` unless explicitly requested. Keep imports clean.
@@ -101,8 +106,9 @@ The Express app exposes the following APIs:
 
 ---
 
-## 5. Setup and Development Commands
-- Install dependencies: `npm install`
+## 6. Setup and Development Commands
+- Install dependencies: `npm install` (Node 22+; `ffmpeg` is required for transcription)
+- Deploy the Modal transcription app: `npm run modal:deploy` (requires the Modal CLI: `pip install modal`)
 - you can't Start dev server if port is being used by pm2 already running.
 - Run PM2 Daemon: `npm run pm2:start` / `npm run pm2:stop`
 - Port: `3005` (localhost:3005)

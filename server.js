@@ -1,11 +1,10 @@
 const express = require('express');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const cors = require('cors');
-const { exec } = require('child_process');
-const { SpeechClient } = require('@google-cloud/speech').v2;
-const { Storage } = require('@google-cloud/storage');
-const { GoogleGenAI } = require('@google/genai');
+const { exec, execFile } = require('child_process');
+const { ModalClient, NotFoundError, TimeoutError } = require('modal');
 const { PDFParse } = require('pdf-parse');
 
 async function pdfParse(dataBuffer) {
@@ -17,6 +16,21 @@ async function pdfParse(dataBuffer) {
 const app = express();
 const PORT = process.env.PORT || 3005;
 const DB_FILE = path.join(__dirname, 'db.json');
+const ENV_FILE = path.join(__dirname, '.env');
+
+// Load API credentials (FIREWORKS_API_KEY, optional MODAL_TOKEN_ID / MODAL_TOKEN_SECRET) from .env
+if (fs.existsSync(ENV_FILE)) {
+  process.loadEnvFile(ENV_FILE);
+}
+
+// AI services: Fireworks AI for LLM calls, a Whisper app deployed on Modal for transcription
+const FIREWORKS_API_URL = 'https://api.fireworks.ai/inference/v1/chat/completions';
+const DEFAULT_LLM_MODEL = 'accounts/fireworks/models/deepseek-v4p1-flash-1017';
+const FIREWORKS_KEY_MISSING = 'FIREWORKS_API_KEY is not set. Add it to the .env file and restart the server.';
+const MODAL_APP_NAME = 'course-viewer-transcriber';
+const MODAL_CLASS_NAME = 'Transcriber';
+// Max wait for a Modal transcription, including any time spent queued for a GPU
+const MODAL_TRANSCRIBE_TIMEOUT_MS = 30 * 60 * 1000;
 
 const IGNORE_DIRS = ['node_modules', 'dist', 'build', '.git', 'venv', '.env', 'env', 'bower_components'];
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif'];
@@ -33,11 +47,8 @@ let db = {
     '/Users/maulik/Downloads/Mega Downloads'
   ],
   progress: {},
-  gcpConfig: {
-    projectId: '',
-    bucketName: '',
-    location: 'global',
-    speechLocation: 'us-central1'
+  aiConfig: {
+    llmModel: ''
   }
 };
 
@@ -45,14 +56,10 @@ if (fs.existsSync(DB_FILE)) {
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
     db = JSON.parse(raw);
-    // Ensure gcpConfig exists
-    if (!db.gcpConfig) {
-      db.gcpConfig = {
-        projectId: '',
-        bucketName: '',
-        location: 'global',
-        speechLocation: 'us-central1'
-      };
+    // Ensure aiConfig exists and drop the legacy Google Cloud settings
+    if (!db.aiConfig || db.gcpConfig) {
+      db.aiConfig = db.aiConfig || { llmModel: '' };
+      delete db.gcpConfig;
       saveDb();
     }
   } catch (err) {
@@ -635,22 +642,50 @@ app.post('/api/open-in-system', (req, res) => {
   });
 });
 
-// --- GCP CONFIG ENDPOINTS ---
+// --- AI CONFIG ENDPOINTS ---
 
-app.get('/api/gcp-config', (req, res) => {
-  res.send(db.gcpConfig || { projectId: '', bucketName: '', location: 'global', speechLocation: 'us-central1' });
+// Fireworks AI is configured when its API key is present in the environment (or .env)
+function isLlmConfigured() {
+  return Boolean(process.env.FIREWORKS_API_KEY);
+}
+
+// Modal is configured when a token is set in the environment or in the Modal CLI config (~/.modal.toml)
+function isTranscriptionConfigured() {
+  if (process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET) return true;
+  const configPath = process.env.MODAL_CONFIG_PATH || path.join(os.homedir(), '.modal.toml');
+  try {
+    return /^\s*token_id\s*=/m.test(fs.readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    return false;
+  }
+}
+
+function getLlmModel() {
+  return (db.aiConfig && db.aiConfig.llmModel) || DEFAULT_LLM_MODEL;
+}
+
+// Never include secrets here: the API is reachable from any origin (cors())
+function getAiConfigStatus() {
+  return {
+    llmModel: getLlmModel(),
+    defaultLlmModel: DEFAULT_LLM_MODEL,
+    llmConfigured: isLlmConfigured(),
+    transcriptionConfigured: isTranscriptionConfigured(),
+    transcriptionApp: MODAL_APP_NAME
+  };
+}
+
+app.get('/api/ai-config', (req, res) => {
+  res.send(getAiConfigStatus());
 });
 
-app.post('/api/gcp-config', (req, res) => {
-  const { projectId, bucketName, location, speechLocation } = req.body;
-  db.gcpConfig = {
-    projectId: projectId || '',
-    bucketName: bucketName || '',
-    location: location || 'global',
-    speechLocation: speechLocation || 'us-central1'
+app.post('/api/ai-config', (req, res) => {
+  const { llmModel } = req.body;
+  db.aiConfig = {
+    llmModel: (llmModel || '').trim()
   };
   saveDb();
-  res.send({ success: true, gcpConfig: db.gcpConfig });
+  res.send({ success: true, aiConfig: getAiConfigStatus() });
 });
 
 // --- VIDEO EXTRA METADATA ENDPOINTS ---
@@ -842,19 +877,78 @@ function insertTimestampLinks(summaryText, relativePath) {
   });
 }
 
-// Call Vertex AI Gemini to generate summary from transcript or document notes
-async function summarizeContent(content, type, gcp, relativePath = '') {
-  if (!gcp.projectId) {
-    throw new Error('GCP Project ID is required for Vertex AI summarization.');
+// Call a Fireworks AI chat model (OpenAI-compatible API) and return the reply text.
+// The response is streamed so long generations aren't cut off by fetch's 5-minute headers timeout.
+async function generateWithFireworks(messages, { maxTokens = 32768 } = {}) {
+  const apiKey = process.env.FIREWORKS_API_KEY;
+  if (!apiKey) {
+    throw new Error(FIREWORKS_KEY_MISSING);
   }
+  const model = getLlmModel();
+
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(FIREWORKS_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
+        },
+        body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true })
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        const err = new Error(`Fireworks API error ${res.status}: ${body.slice(0, 500)}`);
+        err.retryable = res.status === 429 || res.status >= 500;
+        throw err;
+      }
+
+      // Parse server-sent events, keeping only the answer (reasoning arrives as delta.reasoning_content)
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let text = '';
+      let finishReason = null;
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
+          const event = JSON.parse(data);
+          if (event.error) {
+            throw new Error(`Fireworks API error: ${event.error.message || JSON.stringify(event.error)}`);
+          }
+          const choice = event.choices && event.choices[0];
+          if (!choice) continue;
+          if (choice.delta && choice.delta.content) text += choice.delta.content;
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+        }
+      }
+
+      if (finishReason === 'length') {
+        console.warn(`[Fireworks] Response from ${model} hit the ${maxTokens} token limit and may be truncated.`);
+      }
+      // Some models inline their reasoning in <think> tags instead of a separate field
+      return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    } catch (err) {
+      if (err.retryable === false || attempt === maxRetries) {
+        throw err;
+      }
+      console.warn(`[Fireworks] Request attempt ${attempt}/${maxRetries} failed, retrying: ${err.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+    }
+  }
+}
+
+// Call Fireworks AI to generate summary from transcript or document notes
+async function summarizeContent(content, type, relativePath = '') {
   const isTranscript = type === 'video' || type === 'transcript';
-  console.log(`[Vertex AI] Summarizing ${type} with gemini-3.5-flash (location: ${gcp.location || 'global'})...`);
-  const location = gcp.location || 'global';
-  const ai = new GoogleGenAI({
-    enterprise: true,
-    project: gcp.projectId,
-    location: location,
-  });
+  console.log(`[Fireworks] Summarizing ${type} with ${getLlmModel()}...`);
 
   const prompt = isTranscript ? `
 You are an AI assistant helping a student review course lecture material.
@@ -884,12 +978,7 @@ ${content}
 ---
 `;
 
-  const genResult = await ai.models.generateContent({
-    model: 'gemini-3.5-flash',
-    contents: prompt,
-  });
-
-  let summary = genResult.text;
+  let summary = await generateWithFireworks([{ role: 'user', content: prompt }]);
   if (!summary) {
     throw new Error('Summarization returned empty text.');
   }
@@ -940,64 +1029,58 @@ function formatSecondsToTimestamp(totalSeconds) {
   }
 }
 
-// Helper to transcribe audio using Vertex AI Gemini 3.5 Flash
-async function transcribeVideoWithGemini(gcsUri, gcp) {
-  const location = gcp.location || 'global';
-  const ai = new GoogleGenAI({
-    enterprise: true,
-    project: gcp.projectId,
-    location: location,
-  });
-
-  const maxRetries = 3;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    console.log(`[Speech-to-Text] Starting Gemini 3.5 Flash transcription (attempt ${attempt}/${maxRetries})...`);
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: [
-          {
-            fileData: {
-              fileUri: gcsUri,
-              mimeType: 'audio/wav',
-            },
-          },
-          `You are an expert transcriber. Please provide a clean, verbatim transcription of the audio file.
-Format the transcription with timestamps like [MM:SS] or [HH:MM:SS] at the start of each natural paragraph or thought boundary based on the audio content.
-Only output the transcription text, do not add introductory remarks.`,
-        ],
-      });
-
-      const transcript = response.text;
-      if (!transcript || !transcript.trim() || transcript.trim().length < 20) {
-        console.warn(`[Speech-to-Text] Gemini transcription attempt ${attempt} returned empty/short whitespace-only response: "${transcript || ''}"`);
-        if (attempt < maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
-          continue;
-        }
-        throw new Error('Gemini transcription returned empty or invalid text after all retries.');
-      }
-      return transcript;
-    } catch (err) {
-      console.warn(`[Speech-to-Text] Gemini transcription attempt ${attempt} failed: ${err.message}`);
-      if (attempt < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
-        continue;
-      }
-      throw err;
+// Group Whisper segments into timestamped paragraphs ("[MM:SS] text"), breaking at a sentence end after ~30 seconds
+function formatTranscriptSegments(segments, paragraphSeconds = 30) {
+  const paragraphs = [];
+  let current = null;
+  for (const segment of segments || []) {
+    const text = (segment.text || '').trim();
+    if (!text) continue;
+    if (!current) {
+      current = { start: segment.start, texts: [] };
     }
+    current.texts.push(text);
+    const elapsed = segment.end - current.start;
+    const endsSentence = /[.!?]["')\]]?$/.test(text);
+    if ((elapsed >= paragraphSeconds && endsSentence) || elapsed >= paragraphSeconds * 2) {
+      paragraphs.push(current);
+      current = null;
+    }
+  }
+  if (current) {
+    paragraphs.push(current);
+  }
+  return paragraphs
+    .map((p) => `${formatSecondsToTimestamp(p.start)} ${p.texts.join(' ')}`)
+    .join('\n\n');
+}
+
+let modalClient = null;
+
+// Look up the transcribe method of the Transcriber class deployed on Modal (see modal_transcriber.py)
+async function getModalTranscribeMethod() {
+  if (!modalClient) {
+    modalClient = new ModalClient();
+  }
+  try {
+    const cls = await modalClient.cls.fromName(MODAL_APP_NAME, MODAL_CLASS_NAME);
+    const instance = await cls.instance();
+    return instance.method('transcribe');
+  } catch (err) {
+    if (err instanceof NotFoundError) {
+      throw new Error(`Modal app "${MODAL_APP_NAME}" is not deployed. Run "npm run modal:deploy" first.`);
+    }
+    throw err;
   }
 }
 
-// Transcribe audio using Google Cloud Speech-to-Text V2 Chirp (with Gemini primary and timeout fallback)
-async function transcribeVideoWithChirp(videoPath, gcp) {
+// Transcribe a video's audio track with Whisper running on a Modal GPU
+async function transcribeVideoWithModal(videoPath) {
   const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-  const tempAudioPath = path.join(__dirname, `temp_audio_${uniqueId}.wav`);
-  const gcsDestination = `course-viewer-transcripts/audio_${uniqueId}.wav`;
-  let gcsUri = null;
+  const tempAudioPath = path.join(os.tmpdir(), `course-viewer-audio_${uniqueId}.ogg`);
 
   try {
-    // 1. Extract audio locally (one at a time)
+    // 1. Extract a compact mono Opus audio track locally (one at a time)
     const currentLock = ffmpegMutex;
     let resolveLock;
     ffmpegMutex = new Promise((resolve) => { resolveLock = resolve; });
@@ -1006,8 +1089,8 @@ async function transcribeVideoWithChirp(videoPath, gcp) {
     try {
       console.log(`[FFmpeg] Extracting audio from ${videoPath}...`);
       await new Promise((resolve, reject) => {
-        const cmd = `ffmpeg -i "${videoPath}" -vn -ac 1 -ar 16000 -y "${tempAudioPath}"`;
-        exec(cmd, (err) => {
+        const args = ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libopus', '-b:a', '32k', '-y', tempAudioPath];
+        execFile('ffmpeg', args, (err) => {
           if (err) return reject(err);
           resolve();
         });
@@ -1016,94 +1099,28 @@ async function transcribeVideoWithChirp(videoPath, gcp) {
       resolveLock();
     }
 
-    // 2. Upload to GCS
-    console.log(`[GCS] Uploading to gs://${gcp.bucketName}/${gcsDestination}...`);
-    const storage = new Storage();
-    await storage.bucket(gcp.bucketName).upload(tempAudioPath, {
-      destination: gcsDestination
-    });
-    gcsUri = `gs://${gcp.bucketName}/${gcsDestination}`;
-
-    // 3. Try Gemini first (highly recommended: fast, accurate, doesn't hang)
+    // 2. Transcribe on Modal, cancelling the call if it doesn't finish in time (e.g. stuck waiting for a GPU)
+    const audio = fs.readFileSync(tempAudioPath);
+    console.log(`[Modal] Transcribing ${(audio.length / (1024 * 1024)).toFixed(1)} MB of audio...`);
+    const transcribe = await getModalTranscribeMethod();
+    const call = await transcribe.spawn([new Uint8Array(audio.buffer, audio.byteOffset, audio.length)]);
+    let result;
     try {
-      const transcript = await transcribeVideoWithGemini(gcsUri, gcp);
-      console.log(`[Speech-to-Text] Gemini transcription completed successfully!`);
-      return transcript;
-    } catch (geminiErr) {
-      console.warn(`[Speech-to-Text] Gemini transcription failed, falling back to Chirp: ${geminiErr.message}`);
-
-      // 4. Fallback: Transcribe with Speech-to-Text V2 Chirp
-      console.log(`[Speech-to-Text] Starting Chirp fallback transcription...`);
-      const speechLocation = gcp.speechLocation || 'us-central1';
-      const speechClient = new SpeechClient({
-        apiEndpoint: `${speechLocation}-speech.googleapis.com`
-      });
-
-      const recognizerPath = `projects/${gcp.projectId}/locations/${speechLocation}/recognizers/_`;
-      const sttRequest = {
-        recognizer: recognizerPath,
-        files: [{ uri: gcsUri }],
-        config: {
-          languageCodes: ['en-US'],
-          model: 'chirp_3',
-          features: {
-            enableWordTimeOffsets: true
-          },
-          autoDecodingConfig: {}
-        },
-        recognitionOutputConfig: {
-          inlineResponseConfig: {}
-        }
-      };
-
-      const [operation] = await speechClient.batchRecognize(sttRequest);
-
-      // Wait for the Chirp LRO to complete, with a 10-minute timeout
-      const responsePromise = operation.promise();
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Chirp Speech-to-Text transcription timed out (10 minutes)')), 10 * 60 * 1000)
-      );
-      const [sttResponse] = await Promise.race([responsePromise, timeoutPromise]);
-
-      let transcript = '';
-      const results = sttResponse.results || {};
-      if (results[gcsUri] && results[gcsUri].transcript && results[gcsUri].transcript.results) {
-        transcript = results[gcsUri].transcript.results
-          .map(r => {
-            const alt = r.alternatives[0];
-            if (!alt) return '';
-            let segmentText = alt.transcript;
-            if (alt.words && alt.words.length > 0) {
-              const firstWord = alt.words[0];
-              const offset = firstWord.startOffset || firstWord.startTime;
-              let startSec = 0;
-              if (offset) {
-                if (typeof offset === 'string') {
-                  const parsed = parseFloat(offset);
-                  startSec = isNaN(parsed) ? 0 : parsed;
-                } else if (typeof offset === 'object') {
-                  startSec = parseFloat(offset.seconds || 0) + parseFloat(offset.nanos || 0) / 1e9;
-                }
-              }
-              const timeStr = formatSecondsToTimestamp(startSec);
-              return `${timeStr} ${segmentText}`;
-            }
-            return segmentText;
-          })
-          .filter(Boolean)
-          .join(' ');
+      result = await call.get({ timeoutMs: MODAL_TRANSCRIBE_TIMEOUT_MS });
+    } catch (err) {
+      if (err instanceof TimeoutError) {
+        await call.cancel().catch((cancelErr) => console.error('Error cancelling Modal transcription:', cancelErr));
+        throw new Error(`Modal transcription timed out (${MODAL_TRANSCRIBE_TIMEOUT_MS / 60000} minutes)`);
       }
-
-      if (results[gcsUri] && results[gcsUri].error) {
-        throw new Error(`Speech-to-Text failed: ${results[gcsUri].error.message || 'Internal STT error'}`);
-      }
-
-      if (!transcript) {
-        throw new Error('Transcription returned empty text.');
-      }
-
-      return transcript;
+      throw err;
     }
+
+    const transcript = formatTranscriptSegments(result.segments);
+    if (!transcript) {
+      throw new Error('Transcription returned empty text.');
+    }
+    console.log(`[Modal] Transcription completed (language: ${result.language}, ${Math.round(result.duration)}s of audio).`);
+    return transcript;
   } finally {
     // Clean up local temp file
     if (fs.existsSync(tempAudioPath)) {
@@ -1111,15 +1128,6 @@ async function transcribeVideoWithChirp(videoPath, gcp) {
         fs.unlinkSync(tempAudioPath);
       } catch (err) {
         console.error('Error deleting local temp audio file:', err);
-      }
-    }
-    // Clean up GCS staging file
-    if (gcsUri) {
-      try {
-        const storage = new Storage();
-        await storage.bucket(gcp.bucketName).file(gcsDestination).delete();
-      } catch (err) {
-        console.error('Error deleting GCS file:', err);
       }
     }
   }
@@ -1142,7 +1150,9 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
   };
 
   try {
-    const gcp = db.gcpConfig || {};
+    if (!isLlmConfigured()) {
+      throw new Error(FIREWORKS_KEY_MISSING);
+    }
     logMessage('Scanning course structure...');
 
     // Traverse the course path using processCourseTree
@@ -1211,7 +1221,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
           if (transcript) {
             logMessage(`Found existing transcript for "${item.name}". Generating summary...`);
             try {
-              const summary = await summarizeContent(transcript, 'video', gcp, item.relativePath);
+              const summary = await summarizeContent(transcript, 'video', item.relativePath);
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
               notesContent = summary;
               hasNotes = true;
@@ -1223,7 +1233,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
             try {
               const subtitleContent = fs.readFileSync(item.subtitlePath, 'utf8');
               const cleanedText = cleanSubtitleText(subtitleContent);
-              const summary = await summarizeContent(cleanedText, 'video', gcp, item.relativePath);
+              const summary = await summarizeContent(cleanedText, 'video', item.relativePath);
               
               fs.writeFileSync(videoTranscriptPath, cleanedText, 'utf8');
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
@@ -1234,12 +1244,12 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
               logMessage(`[Error] Failed to process subtitles for "${item.name}": ${err.message}`);
             }
           } else {
-            // No subtitles/notes. Try Speech-to-Text if GCP configured
-            if (gcp.projectId && gcp.bucketName) {
-              logMessage(`No notes or subtitles found for "${item.name}". Running Speech-to-Text (this can take a moment)...`);
+            // No subtitles/notes. Transcribe the audio on Modal if configured
+            if (isTranscriptionConfigured()) {
+              logMessage(`No notes or subtitles found for "${item.name}". Transcribing audio on Modal (this can take a moment)...`);
               try {
-                const transcript = await transcribeVideoWithChirp(item.path, gcp);
-                const summary = await summarizeContent(transcript, 'video', gcp, item.relativePath);
+                const transcript = await transcribeVideoWithModal(item.path);
+                const summary = await summarizeContent(transcript, 'video', item.relativePath);
                 
                 fs.writeFileSync(videoTranscriptPath, transcript, 'utf8');
                 fs.writeFileSync(itemSummaryPath, summary, 'utf8');
@@ -1250,7 +1260,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
                 logMessage(`[Error] Transcription failed for "${item.name}": ${err.message}`);
               }
             } else {
-              logMessage(`[Warning] Skipping "${item.name}" because it has no notes, subtitles, or GCP config.`);
+              logMessage(`[Warning] Skipping "${item.name}" because it has no notes or subtitles, and Modal transcription is not configured.`);
               skippedFiles.push(item.name);
             }
           }
@@ -1261,7 +1271,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
             const trimmed = content.trim();
             const isUrl = /^(https?:\/\/[^\s]+)$/i.test(trimmed);
             if (trimmed && !isUrl) {
-              const summary = await summarizeContent(content, 'document', gcp);
+              const summary = await summarizeContent(content, 'document');
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
               notesContent = summary;
               hasNotes = true;
@@ -1280,7 +1290,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
             const htmlContent = fs.readFileSync(item.path, 'utf8');
             const cleanedText = cleanHtmlText(htmlContent);
             if (cleanedText.trim()) {
-              const summary = await summarizeContent(cleanedText, 'document', gcp);
+              const summary = await summarizeContent(cleanedText, 'document');
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
               notesContent = summary;
               hasNotes = true;
@@ -1297,7 +1307,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
             const pdfData = await pdfParse(dataBuffer);
             const text = pdfData.text || '';
             if (text.trim()) {
-              const summary = await summarizeContent(text, 'document', gcp);
+              const summary = await summarizeContent(text, 'document');
               fs.writeFileSync(itemSummaryPath, summary, 'utf8');
 
               // Save the extracted text to transcript.txt so users can chat with it
@@ -1354,13 +1364,6 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
       });
     });
 
-    const location = gcp.location || 'global';
-    const ai = new GoogleGenAI({
-      enterprise: true,
-      project: gcp.projectId,
-      location: location,
-    });
-
     const synthesisPrompt = `
 You are a master educator compiling a comprehensive study guide for a complete course.
 Below are the individual summaries/notes for all the lectures/materials in this course.
@@ -1383,19 +1386,14 @@ ${compilationText}
 ---
 `;
 
-    const synthesisResult = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: synthesisPrompt,
-    });
-
-    let masterSummary = synthesisResult.text;
+    let masterSummary = await generateWithFireworks([{ role: 'user', content: synthesisPrompt }], { maxTokens: 65536 });
     if (!masterSummary) {
       throw new Error('Master summarization returned empty text.');
     }
 
     // Append a list of skipped files if any
     if (skippedFiles.length > 0) {
-      masterSummary += `\n\n---\n\n> [!NOTE]\n> **Skipped Files:** The following file(s) did not have transcripts, subtitles, or active GCP Speech-to-Text configuration and were omitted from this summary:\n` + 
+      masterSummary += `\n\n---\n\n> [!NOTE]\n> **Skipped Files:** The following file(s) did not have transcripts or subtitles, Modal transcription was not configured, and they were omitted from this summary:\n` + 
         skippedFiles.map(name => `> - ${name}`).join('\n') + '\n';
     }
 
@@ -1457,9 +1455,8 @@ async function generateSummaryForPath(filePath) {
   }
 
   const promise = (async () => {
-    const gcp = db.gcpConfig || {};
-    if (!gcp.projectId) {
-      throw new Error('GCP Project ID must be configured in Settings.');
+    if (!isLlmConfigured()) {
+      throw new Error(FIREWORKS_KEY_MISSING);
     }
 
     const ext = path.extname(filePath).toLowerCase();
@@ -1485,7 +1482,7 @@ async function generateSummaryForPath(filePath) {
         transcript = cleanHtmlText(htmlContent);
         fs.writeFileSync(transcriptPath, transcript, 'utf8');
       }
-      const summary = await summarizeContent(transcript, 'document', gcp);
+      const summary = await summarizeContent(transcript, 'document');
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
       return { transcript, summary };
@@ -1501,7 +1498,7 @@ async function generateSummaryForPath(filePath) {
         }
         fs.writeFileSync(transcriptPath, transcript, 'utf8');
       }
-      const summary = await summarizeContent(transcript, 'document', gcp);
+      const summary = await summarizeContent(transcript, 'document');
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
       return { transcript, summary };
@@ -1512,7 +1509,7 @@ async function generateSummaryForPath(filePath) {
         transcript = fs.readFileSync(filePath, 'utf8');
         fs.writeFileSync(transcriptPath, transcript, 'utf8');
       }
-      const summary = await summarizeContent(transcript, 'document', gcp);
+      const summary = await summarizeContent(transcript, 'document');
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
       return { transcript, summary };
@@ -1534,15 +1531,15 @@ async function generateSummaryForPath(filePath) {
       transcript = cleanSubtitleText(subtitleContent);
       fs.writeFileSync(transcriptPath, transcript, 'utf8');
     } else {
-      if (!gcp.bucketName) {
-        throw new Error('GCS Bucket Name must be configured in Settings to run speech-to-text.');
+      if (!isTranscriptionConfigured()) {
+        throw new Error('Modal is not configured. Run "modal token set" (or set MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env) to enable transcription.');
       }
-      transcript = await transcribeVideoWithChirp(filePath, gcp);
+      transcript = await transcribeVideoWithModal(filePath);
       fs.writeFileSync(transcriptPath, transcript, 'utf8');
     }
 
     const relPath = getRelativePathFromAbsolute(filePath);
-    const summary = await summarizeContent(transcript, 'video', gcp, relPath);
+    const summary = await summarizeContent(transcript, 'video', relPath);
     fs.writeFileSync(summaryPath, summary, 'utf8');
 
     return { transcript, summary };
@@ -1613,9 +1610,8 @@ app.post('/api/video/chat', async (req, res) => {
     return res.status(400).send({ error: 'Message is required' });
   }
 
-  const gcp = db.gcpConfig || {};
-  if (!gcp.projectId) {
-    return res.status(400).send({ error: 'GCP Project ID must be configured in Settings.' });
+  if (!isLlmConfigured()) {
+    return res.status(400).send({ error: FIREWORKS_KEY_MISSING });
   }
 
   const ext = path.extname(videoPath);
@@ -1636,13 +1632,6 @@ app.post('/api/video/chat', async (req, res) => {
   }
 
   try {
-    const location = gcp.location || 'global';
-    const ai = new GoogleGenAI({
-      enterprise: true,
-      project: gcp.projectId,
-      location: location,
-    });
-
     const isVideo = ['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext.toLowerCase());
 
     const systemInstruction = `You are an expert AI tutor helping a student study a course.
@@ -1656,29 +1645,20 @@ Here is the ${isVideo ? 'transcript of the lecture' : 'content of the document'}
 ${transcript}
 ---`;
 
-    const contents = [];
+    const messages = [{ role: 'system', content: systemInstruction }];
     if (history && Array.isArray(history)) {
       history.forEach(item => {
-        contents.push({
-          role: item.role === 'model' || item.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: item.content }]
+        messages.push({
+          role: item.role === 'model' || item.role === 'assistant' ? 'assistant' : 'user',
+          content: item.content
         });
       });
     }
-    contents.push({
-      role: 'user',
-      parts: [{ text: message }]
-    });
+    messages.push({ role: 'user', content: message });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: contents,
-      config: {
-        systemInstruction: systemInstruction
-      }
-    });
+    const response = await generateWithFireworks(messages);
 
-    res.send({ response: response.text });
+    res.send({ response });
   } catch (err) {
     console.error('Error in video chat:', err);
     res.status(500).send({ error: err.message || 'Failed to get AI response' });
@@ -1706,9 +1686,8 @@ app.post('/api/course/chat', async (req, res) => {
     return res.status(400).send({ error: 'Course path does not exist on disk' });
   }
 
-  const gcp = db.gcpConfig || {};
-  if (!gcp.projectId) {
-    return res.status(400).send({ error: 'GCP Project ID must be configured in Settings.' });
+  if (!isLlmConfigured()) {
+    return res.status(400).send({ error: FIREWORKS_KEY_MISSING });
   }
 
   try {
@@ -1766,13 +1745,6 @@ app.post('/api/course/chat', async (req, res) => {
       return res.status(400).send({ error: 'No course materials have been transcribed or summarized yet. Please generate AI notes for lectures or generate the Course Summary first.' });
     }
 
-    const location = gcp.location || 'global';
-    const ai = new GoogleGenAI({
-      enterprise: true,
-      project: gcp.projectId,
-      location: location,
-    });
-
     const systemInstruction = `You are a master AI tutor helping a student study a complete course.
 Below is the consolidated content of the course, which may include the course-level master summary, lecture transcripts, and key summaries.
 Use this context to answer the student's questions about the entire course. Explain concepts clearly, relate topics across different lectures, and synthesize information.
@@ -1784,29 +1756,20 @@ Here is the course context:
 ${contextText}
 ---`;
 
-    const contents = [];
+    const messages = [{ role: 'system', content: systemInstruction }];
     if (history && Array.isArray(history)) {
       history.forEach(item => {
-        contents.push({
-          role: item.role === 'model' || item.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: item.content }]
+        messages.push({
+          role: item.role === 'model' || item.role === 'assistant' ? 'assistant' : 'user',
+          content: item.content
         });
       });
     }
-    contents.push({
-      role: 'user',
-      parts: [{ text: message }]
-    });
+    messages.push({ role: 'user', content: message });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: contents,
-      config: {
-        systemInstruction: systemInstruction
-      }
-    });
+    const response = await generateWithFireworks(messages);
 
-    res.send({ response: response.text });
+    res.send({ response });
   } catch (err) {
     console.error('Error in course chat:', err);
     res.status(500).send({ error: err.message || 'Failed to get AI response' });
@@ -1905,6 +1868,7 @@ if (require.main === module) {
 
 module.exports = {
   formatSecondsToTimestamp,
+  formatTranscriptSegments,
   app,
   formatTimestamp
 };

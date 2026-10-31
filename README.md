@@ -13,6 +13,9 @@ A local web application designed to help you organize, play, and track learning 
   - Tracks specific video playback seconds (remembers where you left off).
   - Highlights active courses on the Dashboard under **Continue Learning**.
   - Provides a global reset and per-course reset functionality (clears bookmarks, read counts, and checklist states).
+- **AI Notes & Chat**:
+  - Transcribes lectures without subtitles using Whisper running on [Modal](https://modal.com).
+  - Generates lesson notes, course-wide study guides, and answers questions with [Fireworks AI](https://fireworks.ai) models.
 - **Desktop System Integrations**:
   - **Reveal in Finder**: Instantly highlights the current lesson file in your Mac Finder.
   - **Open in Default App**: Launches the selected file in your system's default viewer (e.g., VLC for unsupported codecs, Acrobat Reader, Chrome, etc.).
@@ -24,6 +27,7 @@ A local web application designed to help you organize, play, and track learning 
 - **Frontend**: Vanilla HTML5, CSS3, and JavaScript (SPA architecture).
 - **Backend**: Express.js server running on port `3005`.
 - **Database**: Local JSON database file (`db.json`) for configuration and progress serialization.
+- **AI Services**: Fireworks AI (LLM) and a Whisper transcription app deployed on Modal (`modal_transcriber.py`).
 - **Development Tooling**: `nodemon` for auto-restarting the server on file modifications.
 
 ---
@@ -31,7 +35,8 @@ A local web application designed to help you organize, play, and track learning 
 ## Installation & Running Locally
 
 ### Prerequisites
-- [Node.js](https://nodejs.org) (v14 or higher)
+- [Node.js](https://nodejs.org) (v22 or higher)
+- For AI notes: [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg`) and the Modal CLI (`pip install modal`)
 
 ### Setup
 1. Clone the repository or download the source files.
@@ -45,6 +50,21 @@ A local web application designed to help you organize, play, and track learning 
    ```
 4. Open the application in your browser:
    [http://localhost:3005](http://localhost:3005)
+
+### AI Notes Setup (Fireworks AI + Modal)
+1. Create a `.env` file from the template and add your [Fireworks API key](https://app.fireworks.ai/settings/users/api-keys):
+   ```bash
+   cp .env.example .env
+   ```
+2. Authenticate the Modal CLI (this saves a token to `~/.modal.toml`, which the server also uses):
+   ```bash
+   modal token set --token-id <id> --token-secret <secret>
+   ```
+3. Deploy the transcription app to your Modal workspace (re-run after editing `modal_transcriber.py`):
+   ```bash
+   npm run modal:deploy
+   ```
+4. Restart the server. **Settings → AI Services** shows whether both services are detected and lets you change the Fireworks model.
 
 ### Watching Folders
 - By default, the application watches `~/Downloads/courses` and `~/Downloads/Mega Downloads`.

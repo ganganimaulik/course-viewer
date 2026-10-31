@@ -218,12 +218,12 @@ async function refreshCatalog(isInitialLoad = false) {
     const configRes = await fetch(`${API_BASE}/api/config`);
     state.config = await configRes.json();
 
-    // Fetch GCP configuration
+    // Fetch AI services configuration
     try {
-      const gcpRes = await fetch(`${API_BASE}/api/gcp-config`);
-      state.gcpConfig = await gcpRes.json();
+      const aiRes = await fetch(`${API_BASE}/api/ai-config`);
+      state.aiConfig = await aiRes.json();
     } catch (e) {
-      console.warn('Error loading GCP config:', e);
+      console.warn('Error loading AI config:', e);
     }
     
     // Fetch courses with merged progress
@@ -1828,54 +1828,59 @@ function renderSettings() {
     });
   }
 
-  // Populate GCP config fields
-  if (state.gcpConfig) {
-    const projInput = document.getElementById('gcp-project-id');
-    const bucketInput = document.getElementById('gcp-bucket-name');
-    const locInput = document.getElementById('gcp-location');
-    const speechLocInput = document.getElementById('gcp-speech-location');
+  // Populate AI services status and model field
+  if (state.aiConfig) {
+    const modelInput = document.getElementById('ai-llm-model');
+    const llmStatus = document.getElementById('ai-llm-status');
+    const transcriptionStatus = document.getElementById('ai-transcription-status');
 
-    if (projInput) projInput.value = state.gcpConfig.projectId || '';
-    if (bucketInput) bucketInput.value = state.gcpConfig.bucketName || '';
-    if (locInput) locInput.value = state.gcpConfig.location || 'global';
-    if (speechLocInput) speechLocInput.value = state.gcpConfig.speechLocation || 'us-central1';
+    if (modelInput) modelInput.value = state.aiConfig.llmModel || '';
+    if (llmStatus) {
+      llmStatus.textContent = state.aiConfig.llmConfigured
+        ? 'API key detected'
+        : 'Not configured. Add FIREWORKS_API_KEY to the .env file and restart the server.';
+      llmStatus.style.color = state.aiConfig.llmConfigured ? 'var(--color-success)' : 'var(--color-warning)';
+    }
+    if (transcriptionStatus) {
+      transcriptionStatus.textContent = state.aiConfig.transcriptionConfigured
+        ? `Token detected (app: ${state.aiConfig.transcriptionApp})`
+        : 'Not configured. Run "modal token set", then "npm run modal:deploy".';
+      transcriptionStatus.style.color = state.aiConfig.transcriptionConfigured ? 'var(--color-success)' : 'var(--color-warning)';
+    }
   }
 }
 
-async function saveGcpConfig() {
-  const projectId = document.getElementById('gcp-project-id').value.trim();
-  const bucketName = document.getElementById('gcp-bucket-name').value.trim();
-  const location = document.getElementById('gcp-location').value.trim() || 'global';
-  const speechLocation = document.getElementById('gcp-speech-location').value.trim() || 'us-central1';
+async function saveAiConfig() {
+  const llmModel = document.getElementById('ai-llm-model').value.trim();
 
-  const btn = document.getElementById('btn-save-gcp');
+  const btn = document.getElementById('btn-save-ai');
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch(`${API_BASE}/api/gcp-config`, {
+    const res = await fetch(`${API_BASE}/api/ai-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId, bucketName, location, speechLocation })
+      body: JSON.stringify({ llmModel })
     });
-    
+
     if (res.ok) {
       const data = await res.json();
-      state.gcpConfig = data.gcpConfig;
-      
-      const status = document.getElementById('gcp-save-status');
+      state.aiConfig = data.aiConfig;
+
+      const status = document.getElementById('ai-save-status');
       if (status) {
         status.style.display = 'inline-block';
         setTimeout(() => {
           status.style.display = 'none';
         }, 3000);
       }
-      showToast('GCP Configuration saved!');
+      showToast('AI Configuration saved!');
     } else {
-      showToast('Failed to save GCP Configuration');
+      showToast('Failed to save AI Configuration');
     }
   } catch (err) {
-    console.error('Error saving GCP Config:', err);
-    showToast('Network error saving GCP config');
+    console.error('Error saving AI Config:', err);
+    showToast('Network error saving AI config');
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2145,8 +2150,8 @@ async function loadVideoMetadata(item) {
 
   // Sync button and loading spinner state for active generation tasks
   const genBtn = document.getElementById('btn-generate-transcript');
-  const spinner = document.getElementById('gcp-loading-spinner');
-  const statusSpan = document.getElementById('gcp-loading-status');
+  const spinner = document.getElementById('ai-loading-spinner');
+  const statusSpan = document.getElementById('ai-loading-status');
   const isGenerating = state.generatingTranscripts && state.generatingTranscripts[item.path];
   if (genBtn && spinner) {
     if (isGenerating) {
@@ -2171,7 +2176,7 @@ async function loadVideoMetadata(item) {
   }
   renderChatMessages();
   
-  const hasGcp = state.gcpConfig && state.gcpConfig.projectId && (item.type !== 'video' || state.gcpConfig.bucketName);
+  const hasAi = state.aiConfig && state.aiConfig.llmConfigured && (item.type !== 'video' || state.aiConfig.transcriptionConfigured);
 
   try {
     const res = await fetch(`${API_BASE}/api/video/metadata?path=${encodeURIComponent(item.path)}`);
@@ -2182,7 +2187,7 @@ async function loadVideoMetadata(item) {
       transcriptBody.textContent = data.transcript;
     } else {
       transcriptBody.innerHTML = isVideo
-        ? '<p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Chirp & Gemini.</p>'
+        ? '<p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Modal & Fireworks AI.</p>'
         : '<p class="empty-pane-msg">No text content extracted. Click the button above to extract text and generate a summary.</p>';
     }
     
@@ -2195,8 +2200,8 @@ async function loadVideoMetadata(item) {
     } else {
       summaryBody.innerHTML = '<p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>';
       
-      // Auto-trigger generation for current item if GCP settings are configured
-      if (!isGenerating && hasGcp) {
+      // Auto-trigger generation for current item if AI services are configured
+      if (!isGenerating && hasAi) {
         if (!state.autoTriggeredGenerations) {
           state.autoTriggeredGenerations = new Set();
         }
@@ -2209,7 +2214,7 @@ async function loadVideoMetadata(item) {
     }
 
     // Trigger pre-generation for next 5 and previous 5 neighbors in the background
-    if (hasGcp) {
+    if (hasAi) {
       const flat = getEligibleItemsList();
       const index = flat.findIndex(i => i.path === item.path);
       if (index !== -1) {
@@ -2242,19 +2247,19 @@ async function generateTranscriptAndSummaryAction() {
   }
   
   const genBtn = document.getElementById('btn-generate-transcript');
-  const spinner = document.getElementById('gcp-loading-spinner');
-  const statusSpan = document.getElementById('gcp-loading-status');
+  const spinner = document.getElementById('ai-loading-spinner');
+  const statusSpan = document.getElementById('ai-loading-status');
   
   if (!genBtn || !spinner) return;
   
   const isVideo = state.currentItem.type === 'video';
   
   // Check settings configuration first
-  if (!state.gcpConfig || !state.gcpConfig.projectId || (isVideo && !state.gcpConfig.bucketName)) {
-    const missingSetting = !state.gcpConfig || !state.gcpConfig.projectId
-      ? 'GCP Project ID'
-      : 'GCS Bucket Name';
-    showToast(`Please configure ${missingSetting} in Settings first!`);
+  if (!state.aiConfig || !state.aiConfig.llmConfigured || (isVideo && !state.aiConfig.transcriptionConfigured)) {
+    const missingSetting = !state.aiConfig || !state.aiConfig.llmConfigured
+      ? 'Fireworks AI'
+      : 'Modal transcription';
+    showToast(`Please set up ${missingSetting} first (see Settings)!`);
     switchView('settings');
     return;
   }
@@ -2771,8 +2776,8 @@ function showCourseSummaryProgress(data) {
 async function generateCourseSummaryAction() {
   if (!state.currentCourse) return;
 
-  if (!state.gcpConfig || !state.gcpConfig.projectId) {
-    showToast('Please configure at least a GCP Project ID in Settings first!');
+  if (!state.aiConfig || !state.aiConfig.llmConfigured) {
+    showToast('Please set up Fireworks AI first (see Settings)!');
     switchView('settings');
     return;
   }

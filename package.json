@@ -11,18 +11,19 @@
     "pm2:stop": "pm2 stop ecosystem.config.js",
     "pm2:restart": "pm2 restart ecosystem.config.js",
     "pm2:delete": "pm2 delete ecosystem.config.js",
-    "test": "jest"
+    "modal:deploy": "modal deploy modal_transcriber.py"
   },
   "dependencies": {
-    "@google-cloud/speech": "^7.3.2",
-    "@google-cloud/storage": "^7.19.0",
-    "@google/genai": "^2.8.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "modal": "^0.11.1",
     "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "jest": "^30.4.2",
     "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
