@@ -1337,6 +1337,54 @@ function formatTranscriptSegments(segments, paragraphSeconds = 30) {
     .join('\n\n');
 }
 
+// WebVTT timestamp, e.g. 75.5 -> "00:01:15.500"
+function formatVttTime(totalSeconds) {
+  const ms = Math.round(Math.max(0, totalSeconds) * 1000);
+  const pad = (n, width = 2) => String(n).padStart(width, '0');
+  return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}.${pad(ms % 1000, 3)}`;
+}
+
+// WebVTT captions from Whisper's sentence segments. Long sentences are split into cues of about two lines,
+// each timed by its share of the sentence's text.
+function formatSegmentsAsVtt(segments, maxCueChars = 84) {
+  const cues = [];
+  for (const segment of segments || []) {
+    const text = (segment.text || '').trim().replace(/\s+/g, ' ');
+    if (!text) continue;
+
+    const pieces = [];
+    let current = '';
+    for (const word of text.split(' ')) {
+      if (current && current.length + 1 + word.length > maxCueChars) {
+        pieces.push(current);
+        current = word;
+      } else {
+        current = current ? `${current} ${word}` : word;
+      }
+    }
+    pieces.push(current);
+
+    const span = Math.max(0, segment.end - segment.start);
+    let offset = 0;
+    for (const piece of pieces) {
+      const start = segment.start + span * (offset / text.length);
+      offset += piece.length + 1;
+      const end = segment.start + span * Math.min(1, offset / text.length);
+      const cueText = piece.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      cues.push(`${formatVttTime(start)} --> ${formatVttTime(end)}\n${cueText}`);
+    }
+  }
+  return `WEBVTT\n\n${cues.join('\n\n')}\n`;
+}
+
+// Save captions next to the lesson, where the scanner attaches them like any subtitle file. Only called when
+// the lesson had no subtitles, so nothing is overwritten.
+function saveCaptions(mediaPath, captions) {
+  const captionsPath = mediaPath.slice(0, -path.extname(mediaPath).length) + '.vtt';
+  fs.writeFileSync(captionsPath, captions, 'utf8');
+  return captionsPath;
+}
+
 let modalClient = null;
 
 // Look up the transcribe method of the Transcriber class deployed on Modal (see modal_transcriber.py)
@@ -1402,7 +1450,7 @@ async function transcribeVideoWithModal(videoPath) {
       throw new Error('Transcription returned empty text.');
     }
     console.log(`[Modal] Transcription completed (language: ${result.language}, ${Math.round(result.duration)}s of audio).`);
-    return transcript;
+    return { transcript, captions: formatSegmentsAsVtt(result.segments) };
   } finally {
     // Clean up local temp file
     if (fs.existsSync(tempAudioPath)) {
@@ -1526,10 +1574,11 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
             if (isTranscriptionConfigured()) {
               logMessage(`No notes or subtitles found for "${item.name}". Transcribing audio on Modal (this can take a moment)...`);
               try {
-                const transcript = await transcribeVideoWithModal(item.path);
+                const { transcript, captions } = await transcribeVideoWithModal(item.path);
                 const summary = await summarizeContent(transcript, 'video', item.relativePath);
-                
+
                 fs.writeFileSync(videoTranscriptPath, transcript, 'utf8');
+                saveCaptions(item.path, captions);
                 fs.writeFileSync(itemSummaryPath, summary, 'utf8');
                 
                 notesContent = summary;
@@ -1741,7 +1790,8 @@ async function processSummaryQueue() {
   queueIsProcessing = false;
 }
 
-async function generateSummaryForPath(filePath) {
+// retranscribe: transcribe a lecture again even if it has a transcript (older ones have no captions)
+async function generateSummaryForPath(filePath, { retranscribe = false } = {}) {
   if (!filePath || !fs.existsSync(filePath)) {
     throw new Error('Invalid file path');
   }
@@ -1840,7 +1890,7 @@ async function generateSummaryForPath(filePath) {
       subtitlePath = baseWithoutExt + '.srt';
     }
 
-    if (existingTranscript && existingTranscript.trim()) {
+    if (!retranscribe && existingTranscript && existingTranscript.trim()) {
       transcript = existingTranscript;
     } else if (subtitlePath) {
       console.log(`[Transcript] Found subtitles for ${filePath}. Parsing track content...`);
@@ -1851,15 +1901,17 @@ async function generateSummaryForPath(filePath) {
       if (!isTranscriptionConfigured()) {
         throw new Error('Modal is not configured. Run "modal token set" (or set MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env) to enable transcription.');
       }
-      transcript = await transcribeVideoWithModal(filePath);
+      const transcription = await transcribeVideoWithModal(filePath);
+      transcript = transcription.transcript;
       fs.writeFileSync(transcriptPath, transcript, 'utf8');
+      subtitlePath = saveCaptions(filePath, transcription.captions);
     }
 
     const relPath = getRelativePathFromAbsolute(filePath);
     const summary = await summarizeContent(transcript, 'video', relPath);
     fs.writeFileSync(summaryPath, summary, 'utf8');
 
-    return { transcript, summary };
+    return { transcript, summary, subtitlePath: subtitlePath || null };
   })();
 
   activeGenerations.set(filePath, promise);
@@ -1879,11 +1931,12 @@ app.post('/api/video/generate-transcript', async (req, res) => {
   }
 
   try {
-    const result = await generateSummaryForPath(videoPath);
+    const result = await generateSummaryForPath(videoPath, { retranscribe: req.body.retranscribe === true });
     res.send({
       success: true,
       transcript: result.transcript,
-      summary: result.summary
+      summary: result.summary,
+      subtitlePath: result.subtitlePath || null
     });
   } catch (err) {
     console.error('Error generating transcript/summary:', err);
@@ -2197,6 +2250,7 @@ if (require.main === module) {
 module.exports = {
   formatSecondsToTimestamp,
   formatTranscriptSegments,
+  formatSegmentsAsVtt,
   app,
   formatTimestamp
 };

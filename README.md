@@ -16,7 +16,8 @@ A local web application designed to help you organize, play, and track learning 
   - Highlights active courses on the Dashboard under **Continue Learning**.
   - Provides a global reset and per-course reset functionality (clears bookmarks, read counts, and checklist states).
 - **AI Notes & Chat**:
-  - Transcribes lectures without subtitles using Whisper running on [Modal](https://modal.com).
+  - Transcribes lectures without subtitles using Whisper running on [Modal](https://modal.com), and saves the timings as a `.vtt` caption file next to the lecture.
+  - Shows transcripts with clickable timestamps that follow along as the lecture plays. Lectures transcribed before captions were saved can be transcribed again from the Transcript tab.
   - Generates lesson notes, course-wide study guides, and answers questions with [Fireworks AI](https://fireworks.ai) models.
 - **Desktop System Integrations**:
   - **Reveal in Finder**: Instantly highlights the current lesson file in your Mac Finder.

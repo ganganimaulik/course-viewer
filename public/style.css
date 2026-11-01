@@ -2180,10 +2180,48 @@ h1 {
   flex-shrink: 0;
 }
 
-.pane-action-row .primary-btn.small {
+.pane-action-row .primary-btn.small,
+.pane-action-row .secondary-btn.small {
   padding: 8px 14px;
   font-size: 12.5px;
   border-radius: 8px;
+}
+
+/* Lecture transcript: stamps seek the player, and the paragraph being spoken is highlighted */
+.transcript-seg {
+  display: flex;
+  gap: 10px;
+  margin: 0 -10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  white-space: normal;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.transcript-seg.active {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--text-main);
+}
+
+.transcript-stamp {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 2px 6px;
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  border-radius: 6px;
+  background: rgba(6, 182, 212, 0.08);
+  color: var(--color-secondary);
+  font-family: var(--font-family-body);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.transcript-stamp:hover {
+  background: rgba(6, 182, 212, 0.2);
 }
 
 .pane-text-body {

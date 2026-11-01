@@ -539,6 +539,9 @@
                       <button class="primary-btn small" id="btn-generate-transcript" onclick="generateTranscriptAndSummaryAction()">
                         Generate AI Notes
                       </button>
+                      <button class="secondary-btn small" id="btn-retranscribe" onclick="generateTranscriptAndSummaryAction({ retranscribe: true })" title="Transcribe the audio again to get timed captions (uses Modal)" style="display: none;">
+                        Re-transcribe for captions
+                      </button>
                       <div class="generation-spinner" id="ai-loading-spinner" style="display: none;">
                         <div class="spinner"></div>
                         <span id="ai-loading-status">Processing...</span>

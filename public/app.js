@@ -1172,6 +1172,13 @@ function initVideoPlayerEvents() {
       slider.value = pct;
       document.getElementById('video-current-time').textContent = formatTime(video.currentTime);
     }
+    updateTranscriptHighlight(video.currentTime);
+  });
+
+  // Follow-along scrolling pauses while the reader scrolls the transcript themselves
+  const transcriptBody = document.getElementById('transcript-body');
+  ['wheel', 'touchmove', 'mousedown', 'keydown'].forEach((type) => {
+    transcriptBody.addEventListener(type, () => { state.transcriptScrolledAt = Date.now(); }, { passive: true });
   });
 
   video.addEventListener('loadedmetadata', () => {
@@ -1246,17 +1253,23 @@ function loadVideoPlayer(item) {
 
   // If subtitle track is present
   if (item.subtitlePath) {
-    const track = document.createElement('track');
-    track.src = `${API_BASE}/api/subtitle?path=${encodeURIComponent(item.subtitlePath)}`;
-    track.kind = 'captions';
-    track.srclang = 'en';
-    track.label = 'English';
-    track.default = true;
-    video.appendChild(track);
+    addCaptionsTrack(video, item.subtitlePath);
   }
 
   video.load();
   video.play().catch(e => console.log("Autoplay blocked by browser. User gesture required."));
+}
+
+function addCaptionsTrack(video, subtitlePath) {
+  const track = document.createElement('track');
+  track.src = `${API_BASE}/api/subtitle?path=${encodeURIComponent(subtitlePath)}`;
+  track.kind = 'captions';
+  track.srclang = 'en';
+  track.label = 'English';
+  track.default = true;
+  video.appendChild(track);
+  // "default" only applies to tracks present when the media loads; captions made mid-lesson start hidden
+  track.track.mode = 'showing';
 }
 
 // Message over the player: a spinner while a video is converted, or a playback error with a way out
@@ -2252,6 +2265,8 @@ async function loadVideoMetadata(item) {
   if (!transcriptBody || !summaryBody) return;
   
   const isVideo = isMediaItem(item);
+  state.transcriptSegments = [];
+  updateRetranscribeButton(item, false);
   transcriptBody.innerHTML = `<p class="empty-pane-msg">Checking for ${isVideo ? 'transcript' : 'extracted text'}...</p>`;
   summaryBody.innerHTML = '<p class="empty-pane-msg">Checking for summary...</p>';
 
@@ -2293,8 +2308,10 @@ async function loadVideoMetadata(item) {
     // The user may have moved on while this loaded: don't show this item's notes (or auto-generate
     // notes, which targets the current item) under a different lesson
     if (!state.currentItem || state.currentItem.path !== item.path) return;
+    state.currentHasTranscript = data.hasTranscript;
+    updateRetranscribeButton(item, data.hasTranscript);
     if (data.hasTranscript && data.transcript.trim()) {
-      transcriptBody.textContent = data.transcript;
+      renderTranscript(item, data.transcript);
     } else {
       transcriptBody.innerHTML = isVideo
         ? '<p class="empty-pane-msg">No transcript available. Click the button above to generate a transcript and summary using Modal & Fireworks AI.</p>'
@@ -2350,7 +2367,112 @@ async function loadVideoMetadata(item) {
   }
 }
 
-async function generateTranscriptAndSummaryAction() {
+// Lecture transcripts start each paragraph (or subtitle cue) with a [MM:SS] stamp
+const TRANSCRIPT_STAMP = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g;
+
+function stampToSeconds(stamp) {
+  return stamp.split(':').map(Number).reduce((total, part) => total * 60 + part, 0);
+}
+
+// Show a lecture transcript with its stamps as buttons that seek the player; other text stays plain
+function renderTranscript(item, text) {
+  const body = document.getElementById('transcript-body');
+  state.transcriptSegments = [];
+  state.activeTranscriptIndex = -1;
+  const stamps = isMediaItem(item) ? [...text.matchAll(TRANSCRIPT_STAMP)] : [];
+  if (stamps.length === 0) {
+    body.textContent = text;
+    return;
+  }
+
+  body.textContent = '';
+  const lead = text.slice(0, stamps[0].index).trim();
+  if (lead) {
+    const leadEl = document.createElement('div');
+    leadEl.className = 'transcript-seg';
+    leadEl.textContent = lead;
+    body.appendChild(leadEl);
+  }
+  stamps.forEach((match, i) => {
+    const start = stampToSeconds(match[1]);
+    const end = i + 1 < stamps.length ? stamps[i + 1].index : text.length;
+    const seg = document.createElement('div');
+    seg.className = 'transcript-seg';
+    const stampBtn = document.createElement('button');
+    stampBtn.className = 'transcript-stamp';
+    stampBtn.textContent = match[1];
+    stampBtn.title = 'Play from here';
+    stampBtn.addEventListener('click', () => seekCurrentMedia(start));
+    const segText = document.createElement('span');
+    segText.textContent = text.slice(match.index + match[0].length, end).trim();
+    seg.append(stampBtn, segText);
+    body.appendChild(seg);
+    state.transcriptSegments.push({ start, el: seg });
+  });
+  const video = document.getElementById('main-video-player');
+  if (state.videoItem === item) updateTranscriptHighlight(video.currentTime);
+}
+
+function seekCurrentMedia(seconds) {
+  if (!isMediaItem(state.currentItem) || state.videoItem !== state.currentItem) return;
+  const video = document.getElementById('main-video-player');
+  video.currentTime = seconds;
+  video.play().catch(err => console.log('Play failed:', err));
+}
+
+// Highlight the paragraph being spoken and keep it in view, unless the reader has just scrolled
+function updateTranscriptHighlight(currentTime) {
+  const segments = state.transcriptSegments;
+  if (!segments || segments.length === 0 || state.videoItem !== state.currentItem) return;
+
+  // Last paragraph that starts at or before the current time (they're in time order)
+  let index = -1;
+  let lo = 0;
+  let hi = segments.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (segments[mid].start <= currentTime + 0.25) {
+      index = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (index === state.activeTranscriptIndex) return;
+  if (segments[state.activeTranscriptIndex]) segments[state.activeTranscriptIndex].el.classList.remove('active');
+  state.activeTranscriptIndex = index;
+  if (index < 0) return;
+
+  const el = segments[index].el;
+  el.classList.add('active');
+  if (Date.now() - (state.transcriptScrolledAt || 0) > 4000) {
+    const pane = document.getElementById('transcript-body');
+    const offset = el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    pane.scrollTo({ top: pane.scrollTop + offset - pane.clientHeight / 3, behavior: 'smooth' });
+  }
+}
+
+// Lectures transcribed before captions existed only kept paragraph times: offer to transcribe them again
+function updateRetranscribeButton(item, hasTranscript) {
+  const btn = document.getElementById('btn-retranscribe');
+  const ai = state.aiConfig || {};
+  const generating = state.generatingTranscripts && state.generatingTranscripts[item.path];
+  const offer = isMediaItem(item) && hasTranscript && !item.subtitlePath && ai.llmConfigured && ai.transcriptionConfigured && !generating;
+  btn.style.display = offer ? '' : 'none';
+}
+
+// A transcription made captions: remember them on the lesson, and show them if it's in the player
+function setItemCaptions(itemPath, subtitlePath) {
+  state.courses.forEach(c => c.sections.forEach(s => s.items.forEach(i => {
+    if (i.path === itemPath) i.subtitlePath = subtitlePath;
+  })));
+  const video = document.getElementById('main-video-player');
+  if (state.videoItem && state.videoItem.path === itemPath && !video.querySelector('track')) {
+    addCaptionsTrack(video, subtitlePath);
+  }
+}
+
+async function generateTranscriptAndSummaryAction(options = {}) {
   if (!state.currentItem || !AI_NOTES_TYPES.includes(state.currentItem.type)) {
     showToast('No active video or document loaded.');
     return;
@@ -2383,6 +2505,7 @@ async function generateTranscriptAndSummaryAction() {
   state.generatingTranscripts[targetPath] = true;
 
   genBtn.style.display = 'none';
+  document.getElementById('btn-retranscribe').style.display = 'none';
   spinner.style.display = 'flex';
   if (statusSpan) {
     statusSpan.textContent = isVideo
@@ -2394,7 +2517,7 @@ async function generateTranscriptAndSummaryAction() {
     const res = await fetch(`${API_BASE}/api/video/generate-transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: targetPath })
+      body: JSON.stringify({ path: targetPath, retranscribe: options.retranscribe === true })
     });
     
     if (!res.ok) {
@@ -2404,6 +2527,9 @@ async function generateTranscriptAndSummaryAction() {
     
     const data = await res.json();
     showToast(`AI Notes generated successfully for ${targetItem.name}!`);
+    if (data.subtitlePath) {
+      setItemCaptions(targetPath, data.subtitlePath);
+    }
     
     // Refresh the metadata panel ONLY if the item is still selected
     if (state.currentItem && state.currentItem.path === targetPath) {
@@ -2420,6 +2546,7 @@ async function generateTranscriptAndSummaryAction() {
     if (state.currentItem && state.currentItem.path === targetPath) {
       if (genBtn) genBtn.style.display = '';
       if (spinner) spinner.style.display = 'none';
+      updateRetranscribeButton(state.currentItem, state.currentHasTranscript);
     }
   }
 }

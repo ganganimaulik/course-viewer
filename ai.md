@@ -77,7 +77,7 @@ File types come from `getFileType()` in `server.js`: `video`, `audio`, `pdf`, `h
 
 ### AI Features
 - `GET /api/video/metadata?path=<path>`: Gets transcript (from `<video>.transcript.txt`) and summary (from `<video>.summary.md`) if they exist.
-- `POST /api/video/generate-transcript` `{ path }`: Builds the transcript (existing file, subtitles, extracted document text, or Whisper transcription on Modal for videos) and summarizes it with Fireworks AI.
+- `POST /api/video/generate-transcript` `{ path, retranscribe }`: Builds the transcript (existing file, subtitles, extracted document text, or Whisper transcription on Modal for video and audio) and summarizes it with Fireworks AI. A Whisper transcription also writes `<name>.vtt` captions; `retranscribe: true` ignores an existing transcript, for lectures transcribed before captions were saved. Returns `subtitlePath` for media.
 - `POST /api/video/pregenerate-summaries` `{ paths }`: Queues background summary generation for neighboring lessons.
 - `POST /api/video/chat` `{ path, message, history }`: Uses the Fireworks model to chat about a lesson's transcript.
 - `POST /api/course/chat` `{ courseId, message, history }`: Chatbot for the entire course context.
@@ -88,7 +88,7 @@ File types come from `getFileType()` in `server.js`: `video`, `audio`, `pdf`, `h
 
 ## 4. AI Services (Fireworks AI & Modal)
 - **LLM (Fireworks AI)**: `generateWithFireworks()` in `server.js` streams chat completions from Fireworks' OpenAI-compatible API. It needs `FIREWORKS_API_KEY`, which `server.js` loads from `.env` at startup (see `.env.example`). The model defaults to `DEFAULT_LLM_MODEL` and can be changed in Settings.
-- **Transcription (Modal)**: `modal_transcriber.py` defines the `course-viewer-transcriber` Modal app (Whisper large-v3-turbo via faster-whisper on a GPU). `transcribeVideoWithModal()` extracts a mono Opus track with `ffmpeg`, calls `Transcriber.transcribe` through the Modal JS SDK (`modal` npm package), and formats the returned segments as `[MM:SS]` paragraphs.
+- **Transcription (Modal)**: `modal_transcriber.py` defines the `course-viewer-transcriber` Modal app (Whisper large-v3-turbo via faster-whisper on a GPU). `transcribeVideoWithModal()` extracts a mono Opus track with `ffmpeg`, calls `Transcriber.transcribe` through the Modal JS SDK (`modal` npm package), and formats the returned segments as `[MM:SS]` paragraphs (the transcript) and as WebVTT cues (`formatSegmentsAsVtt()`, saved by `saveCaptions()` only for lectures without subtitles). The frontend's `renderTranscript()` turns the `[MM:SS]` stamps into seek buttons.
 - Modal credentials come from `~/.modal.toml` (written by `modal token set`) or `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`. Redeploy the app with `npm run modal:deploy` after editing `modal_transcriber.py`.
 
 ---
