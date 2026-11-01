@@ -15,6 +15,8 @@ A local web application designed to help you organize, play, and track learning 
   - Tracks specific video playback seconds (remembers where you left off).
   - Remembers how far you've scrolled in lesson pages and Word documents, and which page of a PDF you're on, and marks them complete when you reach the end.
   - Highlights active courses on the Dashboard under **Continue Learning**.
+  - Logs real study time per day: while a video or audio lesson plays, or while a page, PDF or document is open and you've been active in the last 5 minutes. The Dashboard shows today's time, your streak, progress toward a weekly goal (set in **Settings**) and a 26-week heatmap. History starts the first time you study with this version.
+  - Measures every video and audio lesson's length with ffprobe in the background, so course cards show total length and time left at your playback speed (which is remembered).
   - Provides a global reset and per-course reset functionality (clears bookmarks, read counts, and checklist states).
 - **AI Notes & Chat**:
   - Transcribes lectures without subtitles using Whisper running on [Modal](https://modal.com), and saves the timings as a `.vtt` caption file next to the lecture.

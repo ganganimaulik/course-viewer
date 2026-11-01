@@ -19,7 +19,8 @@ let state = {
   currentSection: null,
   currentItem: null,
   view: 'dashboard',
-  playbackRate: 1.0,
+  playbackRate: parseFloat(localStorage.getItem('playback-rate')) || 1.0,
+  activity: { days: {}, courses: {}, weeklyGoalHours: 5 },
   progressSaveInterval: null,
   lastSavedTime: 0,
   autoplayTimer: null,
@@ -90,6 +91,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   initKeyboardShortcuts();
+  initStudyTime();
+  initHeatmapTooltip();
 
   // Intercept clicks on timestamp links
   document.addEventListener('click', (e) => {
@@ -160,6 +163,7 @@ function handleTimestampClick(href) {
 
 // --- ROUTING / VIEW SWITCHER ---
 function switchView(viewId) {
+  tickStudyTime(); // Leaving the workspace stops the study timer
   state.view = viewId;
   localStorage.setItem('current-view', viewId);
   
@@ -237,6 +241,14 @@ async function refreshCatalog(isInitialLoad = false) {
     } catch (e) {
       console.warn('Error loading AI config:', e);
     }
+
+    // Fetch study time history and the weekly goal
+    try {
+      const activityRes = await fetch(`${API_BASE}/api/activity`);
+      state.activity = await activityRes.json();
+    } catch (e) {
+      console.warn('Error loading study time:', e);
+    }
     
     // Fetch courses with merged progress
     const coursesRes = await fetch(`${API_BASE}/api/courses`);
@@ -245,6 +257,7 @@ async function refreshCatalog(isInitialLoad = false) {
     renderDashboard();
     renderFullCatalog();
     renderSettings();
+    watchMediaDurations();
 
     // If we have an active course open, update its state from the refreshed courses list
     if (state.currentCourse) {
@@ -264,7 +277,7 @@ async function refreshCatalog(isInitialLoad = false) {
           }
           updateHeaderActionBtn();
         }
-        document.getElementById('workspace-course-progress').textContent = `${updatedCourse.progressPercent}% Completed`;
+        document.getElementById('workspace-course-progress').textContent = workspaceProgressText(updatedCourse);
         const watchBtn = document.getElementById('btn-watch-course');
         if (watchBtn) {
           watchBtn.style.display = updatedCourse.progressPercent === 100 ? 'none' : '';
@@ -295,7 +308,6 @@ async function refreshCatalog(isInitialLoad = false) {
 // Calculate & display stats + resume grid + courses list on Dashboard
 function renderDashboard() {
   // 1. Statistics
-  let totalWatchedSeconds = 0;
   let activeCount = 0;
   let completedCount = 0;
   let recentFiles = [];
@@ -309,9 +321,6 @@ function renderDashboard() {
     course.sections.forEach(sec => {
       sec.items.forEach(item => {
         if (item.progress) {
-          if (isMediaItem(item) && item.progress.currentTime) {
-            totalWatchedSeconds += item.progress.currentTime;
-          }
           if (item.progress.completed || item.progress.skipped) {
             completedCount++;
           }
@@ -325,8 +334,10 @@ function renderDashboard() {
     });
   });
 
-  document.getElementById('stat-hours').textContent = `${(totalWatchedSeconds / 3600).toFixed(1)}h`;
+  const totalStudied = Object.values(state.activity.days || {}).reduce((sum, seconds) => sum + seconds, 0);
+  document.getElementById('stat-hours').textContent = `${(totalStudied / 3600).toFixed(1)}h`;
   document.getElementById('stat-active-courses').textContent = activeCount;
+  renderStudyActivity();
   document.getElementById('stat-completed-files').textContent = completedCount;
 
   // Set welcome message username/detail
@@ -486,6 +497,7 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
     });
 
     const folderBadge = displayPath(c.sourceRoot).split('/').pop();
+    const timeText = courseTimeText(c);
 
     card.innerHTML = `
       <div class="course-card-top">
@@ -521,6 +533,11 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
       </div>
       <div class="course-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
       <div class="course-meta">
+        ${timeText ? `
+        <div class="course-meta-row course-time-row">
+          <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>${escapeHtml(timeText)}</span>
+        </div>` : ''}
         <div class="course-meta-row">
           <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
           <span>${videos} Video Lectures</span>
@@ -579,6 +596,287 @@ function getRelativeTime(date) {
   return `${diffDays} days ago`;
 }
 
+// --- STUDY TIME ---
+// Real time spent with lessons (not media time), reported per day and course: while a video or audio lesson
+// plays, or while a page, PDF or document is on screen and the reader has done something in the last 5 minutes.
+const STUDY_IDLE_MS = 5 * 60 * 1000;
+// Reading only counts after some input, so a lesson page reopened on load doesn't count on its own
+const studyTime = { lastTick: performance.now(), lastInputAt: 0, studying: null, pending: new Map() };
+
+function noteStudyInput() {
+  studyTime.lastInputAt = Date.now();
+}
+
+function isStudying() {
+  const item = state.currentItem;
+  if (!item || state.view !== 'workspace' || state.currentWorkspaceTab === 'course-summary') return false;
+  if (isMediaItem(item)) {
+    const video = document.getElementById('main-video-player');
+    return state.videoItem === item && !video.paused && !video.ended;
+  }
+  return document.visibilityState === 'visible' && Date.now() - studyTime.lastInputAt < STUDY_IDLE_MS;
+}
+
+// Credit the time since the last tick to whatever was being studied when it began. Called on a timer and
+// whenever that could change (play, pause, switching lessons or views).
+function tickStudyTime() {
+  const now = performance.now();
+  // Capped, so a laptop waking from sleep doesn't log the time it was asleep
+  const elapsed = Math.min(120, (now - studyTime.lastTick) / 1000);
+  studyTime.lastTick = now;
+  const studied = studyTime.studying;
+  if (studied && elapsed > 0) {
+    const entry = studyTime.pending.get(studied.path) || { seconds: 0, courseId: studied.courseId };
+    entry.seconds += elapsed;
+    studyTime.pending.set(studied.path, entry);
+  }
+  studyTime.studying = isStudying() ? { path: state.currentItem.path, courseId: state.currentCourse.id } : null;
+}
+
+function flushStudyTime() {
+  tickStudyTime();
+  const today = localDateKey(new Date());
+  for (const [filePath, entry] of studyTime.pending) {
+    if (entry.seconds < 1) continue;
+    studyTime.pending.delete(filePath);
+    let seconds = Math.round(entry.seconds);
+    state.activity.days[today] = (state.activity.days[today] || 0) + seconds;
+    state.activity.courses[entry.courseId] = (state.activity.courses[entry.courseId] || 0) + seconds;
+    // The server takes at most 300 seconds per report
+    while (seconds > 0) {
+      const chunk = Math.min(300, seconds);
+      seconds -= chunk;
+      fetch(`${API_BASE}/api/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath, seconds: chunk }),
+        keepalive: true // Still sent if this runs as the tab closes
+      }).catch(err => console.error('Error saving study time:', err));
+    }
+  }
+  if (state.view === 'dashboard') renderDashboard();
+}
+
+function initStudyTime() {
+  ['mousemove', 'keydown', 'wheel', 'pointerdown', 'touchstart'].forEach((type) => {
+    document.addEventListener(type, noteStudyInput, { passive: true });
+  });
+  document.addEventListener('visibilitychange', tickStudyTime);
+  window.addEventListener('pagehide', flushStudyTime);
+  setInterval(tickStudyTime, 5000);
+  setInterval(flushStudyTime, 60000);
+}
+
+// Local calendar date, e.g. "2026-11-01" (matches localDateKey in server.js)
+function localDateKey(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// "45m", "1h 20m", "12h"
+function formatStudyTime(seconds) {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+}
+
+const HEATMAP_WEEKS = 26;
+// A day counts toward a streak, and shows on the heatmap, after a minute of study
+const STUDY_DAY_MIN_SECONDS = 60;
+
+// Heatmap level for a day: 0 below a minute, then up to 15m, 45m, 90m and beyond
+function heatLevel(seconds) {
+  if (seconds < STUDY_DAY_MIN_SECONDS) return 0;
+  if (seconds < 15 * 60) return 1;
+  if (seconds < 45 * 60) return 2;
+  if (seconds < 90 * 60) return 3;
+  return 4;
+}
+
+function renderStudyActivity() {
+  const days = state.activity.days || {};
+  const goalHours = state.activity.weeklyGoalHours || 5;
+  const studied = (date) => (days[localDateKey(date)] || 0) >= STUDY_DAY_MIN_SECONDS;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const addDays = (date, n) => {
+    const d = new Date(date);
+    d.setDate(d.getDate() + n);
+    return d;
+  };
+
+  document.getElementById('study-today').textContent = formatStudyTime(days[localDateKey(today)] || 0);
+
+  // This week, Monday to today, against the goal
+  const monday = addDays(today, -((today.getDay() + 6) % 7));
+  let weekSeconds = 0;
+  for (let d = monday; d <= today; d = addDays(d, 1)) weekSeconds += days[localDateKey(d)] || 0;
+  document.getElementById('study-week-text').textContent = `${formatStudyTime(weekSeconds)} of ${goalHours}h`;
+  document.getElementById('study-week-bar').style.width = `${Math.min(100, (weekSeconds / (goalHours * 3600)) * 100)}%`;
+
+  // Streaks: the current one still counts until the end of today, so it doesn't read 0 before studying
+  let streak = 0;
+  for (let d = studied(today) ? today : addDays(today, -1); studied(d); d = addDays(d, -1)) streak++;
+  let best = 0;
+  let run = 0;
+  let previous = null;
+  Object.keys(days).filter(key => days[key] >= STUDY_DAY_MIN_SECONDS).sort().forEach((key) => {
+    const [y, m, d] = key.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    run = previous && localDateKey(addDays(previous, 1)) === key ? run + 1 : 1;
+    best = Math.max(best, run);
+    previous = date;
+  });
+  document.getElementById('study-streak').textContent = `${streak} ${streak === 1 ? 'day' : 'days'}`;
+  document.getElementById('study-streak-best').textContent = `Best: ${best} ${best === 1 ? 'day' : 'days'}`;
+
+  // Heatmap: one column per week, Monday at the top, ending with this week
+  const grid = document.getElementById('study-heatmap');
+  const months = document.getElementById('study-heatmap-months');
+  grid.innerHTML = '';
+  months.innerHTML = '';
+  const start = addDays(monday, -(HEATMAP_WEEKS - 1) * 7);
+  let daysStudied = 0;
+  let total = 0;
+  let lastLabelColumn = -3;
+  for (let week = 0; week < HEATMAP_WEEKS; week++) {
+    const weekStart = addDays(start, week * 7);
+    // Label a column where a new month starts (skipping labels that would crowd the previous one)
+    const monthStarts = week === 0 || weekStart.getMonth() !== addDays(weekStart, -7).getMonth();
+    if (monthStarts && week - lastLabelColumn >= 3) {
+      const label = document.createElement('span');
+      label.textContent = weekStart.toLocaleDateString(undefined, { month: 'short' });
+      label.style.gridColumn = String(week + 1);
+      months.appendChild(label);
+      lastLabelColumn = week;
+    }
+    for (let day = 0; day < 7; day++) {
+      const date = addDays(weekStart, day);
+      const cell = document.createElement('div');
+      if (date > today) {
+        cell.className = 'heat-cell future';
+      } else {
+        const seconds = days[localDateKey(date)] || 0;
+        cell.className = `heat-cell level-${heatLevel(seconds)}`;
+        cell.dataset.label = `${date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${seconds >= STUDY_DAY_MIN_SECONDS ? formatStudyTime(seconds) : 'No study'}`;
+        if (seconds >= STUDY_DAY_MIN_SECONDS) daysStudied++;
+        total += seconds;
+      }
+      grid.appendChild(cell);
+    }
+  }
+  grid.setAttribute('aria-label', `Study time over the last ${HEATMAP_WEEKS} weeks: ${daysStudied} days studied, ${formatStudyTime(total)} in total`);
+}
+
+// Heatmap tooltip, placed above the hovered day
+function initHeatmapTooltip() {
+  const grid = document.getElementById('study-heatmap');
+  const tooltip = document.getElementById('study-heatmap-tooltip');
+  grid.addEventListener('mouseover', (event) => {
+    const cell = event.target.closest('.heat-cell');
+    if (!cell || !cell.dataset.label) return;
+    tooltip.textContent = cell.dataset.label;
+    tooltip.style.display = 'block';
+    const card = tooltip.offsetParent.getBoundingClientRect();
+    const box = cell.getBoundingClientRect();
+    const left = Math.min(Math.max(box.left + box.width / 2 - card.left, tooltip.offsetWidth / 2), card.width - tooltip.offsetWidth / 2);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${box.top - card.top - 8}px`;
+  });
+  grid.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+}
+
+async function saveWeeklyGoal() {
+  const input = document.getElementById('weekly-goal-input');
+  try {
+    const res = await fetch(`${API_BASE}/api/activity/goal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weeklyGoalHours: parseFloat(input.value) })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save the goal');
+    state.activity.weeklyGoalHours = data.weeklyGoalHours;
+    showToast(`Weekly goal set to ${data.weeklyGoalHours}h`);
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+// --- COURSE LENGTH ---
+// Total length of a course's video and audio, and how much is left at the current playback speed. Lengths
+// come from the server measuring files in the background, or from having played the lesson.
+function getCourseTime(course) {
+  let total = 0;
+  let left = 0;
+  let unknown = 0;
+  course.sections.forEach(sec => sec.items.forEach(item => {
+    if (!isMediaItem(item)) return;
+    const prog = item.progress;
+    const duration = item.duration || (prog && prog.duration);
+    if (!duration) {
+      if (item.duration !== null) unknown++; // null: unreadable, so it won't be measured
+      return;
+    }
+    total += duration;
+    if (!prog || (!prog.completed && !prog.skipped)) {
+      left += Math.max(0, duration - ((prog && prog.currentTime) || 0));
+    }
+  }));
+  return { total, left: left / state.playbackRate, unknown };
+}
+
+function formatRate(rate) {
+  return `${+rate.toFixed(2)}x`;
+}
+
+// "14h 20m total · 6h 5m left at 1.5x", prefixed with ≈ while some lengths are still being measured
+function courseTimeText(course) {
+  const { total, left, unknown } = getCourseTime(course);
+  if (!total) return '';
+  const speed = state.playbackRate !== 1 ? ` at ${formatRate(state.playbackRate)}` : '';
+  const remaining = left >= 60 ? `${formatStudyTime(left)} left${speed}` : 'all watched';
+  return `${unknown > 0 ? '≈ ' : ''}${formatStudyTime(total)} total · ${remaining}`;
+}
+
+function workspaceProgressText(course) {
+  const { left } = getCourseTime(course);
+  return `${course.progressPercent}% Completed${left >= 60 ? ` · ${formatStudyTime(left)} left` : ''}`;
+}
+
+// While the server measures a new library, fill in lengths as they arrive
+function watchMediaDurations() {
+  const missing = state.courses.some(c => c.sections.some(s => s.items.some(i => isMediaItem(i) && i.duration === undefined)));
+  if (state.durationsTimer || !missing) return;
+  const startedAt = Date.now();
+  state.durationsTimer = setInterval(async () => {
+    try {
+      const { durations, pending } = await (await fetch(`${API_BASE}/api/media/durations`)).json();
+      let changed = false;
+      state.courses.forEach(c => c.sections.forEach(s => s.items.forEach(i => {
+        if (durations[i.path] && i.duration !== durations[i.path]) {
+          i.duration = durations[i.path];
+          changed = true;
+        }
+      })));
+      if (changed) {
+        if (state.view === 'dashboard') renderDashboard();
+        else if (state.view === 'courses') renderFullCatalog();
+        if (state.currentCourse) {
+          document.getElementById('workspace-course-progress').textContent = workspaceProgressText(state.currentCourse);
+        }
+      }
+      if (pending === 0 || Date.now() - startedAt > 10 * 60 * 1000) {
+        clearInterval(state.durationsTimer);
+        state.durationsTimer = null;
+      }
+    } catch (err) {
+      console.error('Error loading lesson lengths:', err);
+    }
+  }, 8000);
+}
+
 // --- ================== WORKSPACE VIEW ACTIONS ================== ---
 
 // Clicked Resume from Dashboard card
@@ -618,7 +916,7 @@ function openCourse(courseId, restoreItemPath = null) {
   switchView('workspace');
 
   document.getElementById('workspace-course-title').textContent = course.title;
-  document.getElementById('workspace-course-progress').textContent = `${course.progressPercent}% Completed`;
+  document.getElementById('workspace-course-progress').textContent = workspaceProgressText(course);
   
   const watchBtn = document.getElementById('btn-watch-course');
   if (watchBtn) {
@@ -1007,6 +1305,7 @@ function updateHeaderActionBtn() {
 // Select item to load in viewer panel
 function selectItem(item, section = null) {
   flushReadingPosition(); // Save where the previous page or PDF was left
+  tickStudyTime(); // Credit time spent on the previous lesson
 
   // Clear any active playback timer loops
   if (state.progressSaveInterval) {
@@ -1102,6 +1401,8 @@ function selectItem(item, section = null) {
       extraSidebar.classList.add('collapsed');
     }
   }
+
+  tickStudyTime(); // Start crediting the new lesson
 }
 
 // Toggle visible containers inside viewport
@@ -1155,6 +1456,7 @@ function initVideoPlayerEvents() {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
     cancelAutoplay(); // Replaying after the end shouldn't jump to the next lesson mid-video
     startProgressInterval();
+    tickStudyTime();
     
     // Auto collapse sidebar when video is playing
     const sidebar = document.getElementById('app-sidebar');
@@ -1168,6 +1470,7 @@ function initVideoPlayerEvents() {
     playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
     stopProgressInterval();
     saveVideoProgress(true); // Save progress instantly on pause
+    tickStudyTime();
     
     // Auto expand sidebar if it was auto-collapsed
     if (state.sidebarAutoCollapsed) {
@@ -1470,8 +1773,12 @@ function toggleSpeedMenu() {
 
 function setPlaybackRate(rate) {
   state.playbackRate = rate;
+  localStorage.setItem('playback-rate', String(rate));
   const video = document.getElementById('main-video-player');
   video.playbackRate = rate;
+  if (state.currentCourse) {
+    document.getElementById('workspace-course-progress').textContent = workspaceProgressText(state.currentCourse);
+  }
   
   document.getElementById('video-speed-btn').textContent = `${rate.toFixed(2)}x`;
   document.getElementById('speed-dropdown-menu').classList.remove('active');
@@ -1613,7 +1920,7 @@ function recomputeTotalProgress() {
 
   if (state.currentCourse) {
     const updated = state.courses.find(c => c.id === state.currentCourse.id);
-    document.getElementById('workspace-course-progress').textContent = `${updated.progressPercent}% Completed`;
+    document.getElementById('workspace-course-progress').textContent = workspaceProgressText(updated);
     const watchBtn = document.getElementById('btn-watch-course');
     if (watchBtn) {
       watchBtn.style.display = updated.progressPercent === 100 ? 'none' : '';
@@ -1757,8 +2064,13 @@ function trackPageScroll(item, doc) {
   // make it look finished
   let interacted = false;
   ['wheel', 'keydown', 'touchstart', 'mousedown'].forEach((type) => {
-    doc.addEventListener(type, () => { interacted = true; }, { passive: true, capture: true });
+    doc.addEventListener(type, () => {
+      interacted = true;
+      noteStudyInput();
+    }, { passive: true, capture: true });
   });
+  // Input inside the frame doesn't reach the app's own listeners, which keep the study timer going
+  doc.addEventListener('mousemove', noteStudyInput, { passive: true });
 
   // Reopen where the reader left off, unless the lesson is done. Done again once the page has fully loaded,
   // since late styles and images move things around, unless the reader has started scrolling by then.
@@ -2196,6 +2508,11 @@ function renderSettings() {
       tr.querySelector('.table-action-btn').addEventListener('click', () => removeFolder(folder));
       tableBody.appendChild(tr);
     });
+  }
+
+  const goalInput = document.getElementById('weekly-goal-input');
+  if (goalInput && document.activeElement !== goalInput) {
+    goalInput.value = state.activity.weeklyGoalHours || 5;
   }
 
   // Populate AI services status and model field

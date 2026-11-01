@@ -47,6 +47,10 @@ The application saves config and progress state in a local JSON database: [db.js
       "pages": 20
     }
   },
+  "activity": {
+    "2026-06-08": { "/absolute/path/to/courses/folder-1/Course_Name": 1830.5 }
+  },
+  "weeklyGoalHours": 5,
   "aiConfig": {
     "llmModel": "accounts/fireworks/models/deepseek-v4p1-flash-1017"
   }
@@ -73,6 +77,12 @@ The Express app exposes the following APIs:
 - `POST /api/progress/reset`: Clears all progress.
 - `POST /api/courses/reset` `{ courseId }`: Resets progress for a specific course (id is base64url of its absolute path).
 - `POST /api/courses/complete` `{ courseId }`: Marks all lessons in a course as completed.
+- `GET /api/media/durations`: Video/audio lengths measured so far, and how many are still `pending`. Lengths are measured with ffprobe in the background (`measureDurations()`) and cached in `CACHE_DIR/durations.json`; `/api/courses` includes them as `duration` (`null` if ffprobe couldn't read the file, left out while pending).
+
+### Study Time
+- `POST /api/activity` `{ filePath, seconds }`: Adds real study time (at most 300 seconds per report) to today's total for the file's course, in `db.activity` (`{ 'YYYY-MM-DD': { coursePath: seconds } }`, local dates). The frontend reports while a video or audio lesson plays, or while a page/PDF/document is open with input in the last 5 minutes (`tickStudyTime()`). Progress resets leave this history alone.
+- `GET /api/activity`: Study seconds per day and per course id, plus `weeklyGoalHours`.
+- `POST /api/activity/goal` `{ weeklyGoalHours }`: Saves the weekly goal (default 5).
 
 ### File Delivery
 - `GET /api/video?path=<path>`: Streams a video or audio file (supports range/partial content requests). MPEG transport streams (`.ts`, recognised by their sync bytes, since `.ts` can also be TypeScript) are streamed from an MP4 copy that `getPlayableCopy()` makes with ffmpeg on first play, cached in `CACHE_DIR` (`~/Library/Caches/course-viewer`, or `COURSE_VIEWER_CACHE`).

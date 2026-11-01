@@ -5,15 +5,14 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
 // Load the server against a throwaway db.json and cache, so these tests can add a watched folder and save
-// progress without touching the real ones. server.js creates the db file on load; stop here if it didn't.
+// progress without touching the real ones. The db starts with no watched folders: the built-in defaults are
+// real course folders, which scanning would read (and measure with ffprobe).
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'course-viewer-test-'));
 const cacheDir = path.join(tmpDir, 'cache');
 process.env.COURSE_VIEWER_DB = path.join(tmpDir, 'db.json');
 process.env.COURSE_VIEWER_CACHE = cacheDir;
+fs.writeFileSync(process.env.COURSE_VIEWER_DB, JSON.stringify({ folders: [], progress: {}, aiConfig: { llmModel: '' } }));
 const { app } = require('../server');
-if (!fs.existsSync(process.env.COURSE_VIEWER_DB)) {
-  throw new Error('server.js ignored COURSE_VIEWER_DB; refusing to run against the real db.json');
-}
 
 const libraryDir = path.join(tmpDir, 'library');
 const courseDir = path.join(libraryDir, 'Course A');
@@ -58,6 +57,11 @@ beforeAll(async () => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
+  // Stop here if the server didn't load the throwaway db (it would be watching real folders)
+  const { folders } = await (await fetch(`${baseUrl}/api/config`)).json();
+  if (folders.length > 0) {
+    throw new Error('server.js ignored COURSE_VIEWER_DB; refusing to run against the real db.json');
+  }
   expect((await postJson('/api/config', { path: libraryDir })).status).toBe(200);
 });
 
@@ -135,13 +139,14 @@ describe('file serving', () => {
   });
 });
 
-describe('lesson types', () => {
-  const courseItems = async () => {
-    const courses = await (await fetch(`${baseUrl}/api/courses`)).json();
-    const items = courses.find((c) => c.path === courseDir).sections.flatMap((s) => s.items);
-    return Object.fromEntries(items.map((item) => [item.name, item]));
-  };
+// Course A's items, by file name
+const courseItems = async () => {
+  const courses = await (await fetch(`${baseUrl}/api/courses`)).json();
+  const items = courses.find((c) => c.path === courseDir).sections.flatMap((s) => s.items);
+  return Object.fromEntries(items.map((item) => [item.name, item]));
+};
 
+describe('lesson types', () => {
   it('tells transport stream videos apart from TypeScript, and lists audio as lessons', async () => {
     const items = await courseItems();
     expect(items['talk.mp3'].type).toBe('audio');
@@ -204,6 +209,51 @@ describe('reading progress', () => {
   it('keeps reading positions in range', async () => {
     const prog = await (await postJson('/api/progress', { filePath: path.join(courseDir, 'other.pdf'), page: 99, pages: 4 })).json();
     expect(prog).toMatchObject({ page: 4, pages: 4 });
+  });
+});
+
+describe('study time', () => {
+  it('adds up seconds per day and per course', async () => {
+    expect((await postJson('/api/activity', { filePath: videoPath, seconds: 30 })).status).toBe(200);
+    expect((await postJson('/api/activity', { filePath: pagePath, seconds: 15 })).status).toBe(200);
+    const activity = await (await fetch(`${baseUrl}/api/activity`)).json();
+    expect(activity.courses[Buffer.from(courseDir).toString('base64url')]).toBe(45);
+    expect(Object.values(activity.days)).toEqual([45]);
+  });
+
+  it('rejects implausible reports and files outside the watched folders', async () => {
+    expect((await postJson('/api/activity', { filePath: videoPath, seconds: 5000 })).status).toBe(400);
+    expect((await postJson('/api/activity', { filePath: videoPath, seconds: -5 })).status).toBe(400);
+    expect((await postJson('/api/activity', { filePath: outsideFile, seconds: 10 })).status).toBe(400);
+  });
+
+  it('saves the weekly goal', async () => {
+    expect((await (await fetch(`${baseUrl}/api/activity`)).json()).weeklyGoalHours).toBe(5);
+    expect((await postJson('/api/activity/goal', { weeklyGoalHours: 7.5 })).status).toBe(200);
+    expect((await (await fetch(`${baseUrl}/api/activity`)).json()).weeklyGoalHours).toBe(7.5);
+    expect((await postJson('/api/activity/goal', { weeklyGoalHours: 0 })).status).toBe(400);
+  });
+});
+
+describe('lesson lengths', () => {
+  (hasFfmpeg ? it : it.skip)('measures video lengths in the background', async () => {
+    let clip = (await courseItems())['clip.ts'];
+    for (let i = 0; i < 50 && !clip.duration; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      clip = (await courseItems())['clip.ts'];
+    }
+    expect(clip.duration).toBeGreaterThan(0.5);
+    expect(clip.duration).toBeLessThan(2);
+
+    // Lengths are saved for the next run once the queue is done
+    let measured = await (await fetch(`${baseUrl}/api/media/durations`)).json();
+    for (let i = 0; i < 50 && measured.pending > 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      measured = await (await fetch(`${baseUrl}/api/media/durations`)).json();
+    }
+    expect(measured.durations[streamPath]).toBe(clip.duration);
+    const saved = JSON.parse(fs.readFileSync(path.join(cacheDir, 'durations.json'), 'utf8'));
+    expect(saved[streamPath].duration).toBe(clip.duration);
   });
 });
 

@@ -229,6 +229,84 @@ function escapeHtml(text) {
     .replace(/'/g, '&#039;');
 }
 
+// --- LESSON LENGTHS ---
+// Video and audio lengths, measured with ffprobe in the background and kept between runs, so course cards can
+// show total and remaining time before anything is played: { [path]: { size, mtimeMs, duration } }
+const DURATIONS_FILE = path.join(CACHE_DIR, 'durations.json');
+let mediaDurations = {};
+try {
+  mediaDurations = JSON.parse(fs.readFileSync(DURATIONS_FILE, 'utf8'));
+} catch (err) {
+  // Nothing measured yet
+}
+const durationQueue = new Set();
+let measuringDurations = false;
+let ffprobeMissing = false;
+
+// Seconds; null if ffprobe couldn't read the file; undefined (left out of the JSON) while still being measured
+function getMediaDuration(filePath, stat) {
+  const known = mediaDurations[filePath];
+  if (known && known.size === stat.size && known.mtimeMs === stat.mtimeMs) {
+    return known.duration;
+  }
+  if (!ffprobeMissing) {
+    durationQueue.add(filePath);
+    measureDurations();
+  }
+  return undefined;
+}
+
+function saveDurations() {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    const tmpFile = `${DURATIONS_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(mediaDurations), 'utf8');
+    fs.renameSync(tmpFile, DURATIONS_FILE);
+  } catch (err) {
+    console.error('Error saving lesson lengths:', err);
+  }
+}
+
+async function measureDurations() {
+  if (measuringDurations) return;
+  measuringDurations = true;
+  let measured = 0;
+  // A few at a time: each ffprobe call mostly waits on the disk
+  const worker = async () => {
+    while (durationQueue.size > 0 && !ffprobeMissing) {
+      const filePath = durationQueue.values().next().value;
+      durationQueue.delete(filePath);
+      let stat;
+      try {
+        stat = fs.statSync(filePath);
+      } catch (err) {
+        continue; // Deleted since it was queued
+      }
+      let duration = null;
+      try {
+        const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath]);
+        const seconds = parseFloat(stdout);
+        if (Number.isFinite(seconds)) duration = Math.round(seconds * 10) / 10;
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          ffprobeMissing = true;
+          console.warn('[ffprobe] Not found: lesson lengths will only be known once each lesson has played.');
+          break;
+        }
+        // Unreadable file: recorded below, so it isn't measured again on every scan
+      }
+      mediaDurations[filePath] = { size: stat.size, mtimeMs: stat.mtimeMs, duration };
+      if (++measured % 50 === 0) saveDurations();
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  saveDurations();
+  measuringDurations = false;
+  if (durationQueue.size > 0 && !ffprobeMissing) {
+    measureDurations(); // Queued while the last files were being measured
+  }
+}
+
 // Convert SRT Subtitles to VTT on the fly
 function convertSrtToVtt(srtContent) {
   return 'WEBVTT\n\n' + srtContent
@@ -288,19 +366,21 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
             sectionsMap[currentSectionName] = [];
           }
 
+          const stat = fs.statSync(fullPath);
           const itemObj = {
             name: item.name,
             path: fullPath,
             relativePath: path.relative(coursePath, fullPath),
             type: type,
             extension: ext,
-            size: fs.statSync(fullPath).size
+            size: stat.size
           };
 
           if (type === 'video' && TRANSPORT_STREAM_EXTENSIONS.includes(ext)) {
             itemObj.remux = true; // Played from a converted copy, made on first play
           }
           if (isMediaType(type)) {
+            itemObj.duration = getMediaDuration(fullPath, stat);
             mediaItems.push(itemObj);
           }
 
@@ -475,6 +555,83 @@ app.get('/api/courses', (req, res) => {
   });
 
   res.send(courses);
+});
+
+// Lengths measured so far, which the app fills in while ffprobe works through a new library
+app.get('/api/media/durations', (req, res) => {
+  const durations = {};
+  for (const [filePath, info] of Object.entries(mediaDurations)) {
+    if (info.duration) durations[filePath] = info.duration;
+  }
+  res.send({ durations, pending: durationQueue.size + (measuringDurations ? 1 : 0) });
+});
+
+// --- STUDY TIME ---
+// Real time spent studying, which the app reports while a lesson plays or is being read:
+// db.activity = { 'YYYY-MM-DD': { [coursePath]: seconds } }. Progress resets leave it alone.
+const DEFAULT_WEEKLY_GOAL_HOURS = 5;
+// The app reports at least once a minute, so a longer report is a bug or a forged request
+const MAX_ACTIVITY_SECONDS = 300;
+
+// Local calendar date; the server runs on this Mac, so its time zone is the user's
+function localDateKey(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// The course a file belongs to: its top-level folder in a watched folder, or the watched folder itself for
+// loose files (the "Downloads - <folder>" course)
+function getCoursePathForFile(filePath) {
+  for (const folder of db.folders || []) {
+    if (filePath.startsWith(folder + path.sep)) {
+      const [first, ...rest] = path.relative(folder, filePath).split(path.sep);
+      return rest.length > 0 ? path.join(folder, first) : folder;
+    }
+  }
+  return null;
+}
+
+app.post('/api/activity', (req, res) => {
+  const { filePath, seconds } = req.body;
+  const amount = Number(seconds);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_ACTIVITY_SECONDS) {
+    return res.status(400).send({ error: `seconds must be between 0 and ${MAX_ACTIVITY_SECONDS}` });
+  }
+  const coursePath = typeof filePath === 'string' && isInWatchedFolder(filePath) ? getCoursePathForFile(filePath) : null;
+  if (!coursePath) {
+    return res.status(400).send({ error: 'Invalid file path' });
+  }
+
+  db.activity = db.activity || {};
+  const day = localDateKey();
+  const perCourse = db.activity[day] = db.activity[day] || {};
+  perCourse[coursePath] = Math.round(((perCourse[coursePath] || 0) + amount) * 10) / 10;
+  saveDb();
+  res.send({ success: true });
+});
+
+// Study time per day and per course (by course id), and the weekly goal
+app.get('/api/activity', (req, res) => {
+  const days = {};
+  const courses = {};
+  for (const [day, perCourse] of Object.entries(db.activity || {})) {
+    for (const [coursePath, seconds] of Object.entries(perCourse)) {
+      days[day] = (days[day] || 0) + seconds;
+      const courseId = Buffer.from(coursePath).toString('base64url');
+      courses[courseId] = (courses[courseId] || 0) + seconds;
+    }
+  }
+  res.send({ days, courses, weeklyGoalHours: db.weeklyGoalHours || DEFAULT_WEEKLY_GOAL_HOURS });
+});
+
+app.post('/api/activity/goal', (req, res) => {
+  const hours = Number(req.body.weeklyGoalHours);
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 168) {
+    return res.status(400).send({ error: 'weeklyGoalHours must be between 0 and 168' });
+  }
+  db.weeklyGoalHours = Math.round(hours * 10) / 10;
+  saveDb();
+  res.send({ weeklyGoalHours: db.weeklyGoalHours });
 });
 
 // Get single item progress

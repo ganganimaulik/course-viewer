@@ -73,7 +73,7 @@
       <div class="sidebar-stats">
         <div class="stats-title">All-Time Progress</div>
         <div class="stat-row">
-          <span class="stat-label">Hours Watched</span>
+          <span class="stat-label">Time Studied</span>
           <span class="stat-val" id="stat-hours">0.0h</span>
         </div>
         <div class="stat-row">
@@ -101,6 +101,42 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             Refresh Folders
           </button>
+        </div>
+
+        <!-- Study Activity: time actually spent with lessons, logged per day -->
+        <div class="study-section">
+          <h2 class="section-heading">Study Activity</h2>
+          <div class="study-panel">
+            <div class="study-stats">
+              <div class="study-stat">
+                <span class="study-stat-label">Today</span>
+                <span class="study-stat-value" id="study-today">0m</span>
+              </div>
+              <div class="study-stat">
+                <span class="study-stat-label">Streak</span>
+                <span class="study-stat-value" id="study-streak">0 days</span>
+                <span class="study-stat-note" id="study-streak-best">Best: 0 days</span>
+              </div>
+              <div class="study-stat study-stat-goal">
+                <div class="study-goal-header">
+                  <span class="study-stat-label">This week</span>
+                  <span class="study-stat-note" id="study-week-text">0m of 5h</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill" id="study-week-bar" style="width: 0%"></div></div>
+              </div>
+            </div>
+            <div class="study-heatmap-wrap">
+              <div class="study-heatmap-months" id="study-heatmap-months" aria-hidden="true"></div>
+              <div class="study-heatmap-body">
+                <div class="study-heatmap-days" aria-hidden="true"><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span></span></div>
+                <div class="study-heatmap" id="study-heatmap" role="img"></div>
+              </div>
+              <div class="study-heatmap-legend" aria-hidden="true">
+                <span>Less</span><i class="heat-cell level-0"></i><i class="heat-cell level-1"></i><i class="heat-cell level-2"></i><i class="heat-cell level-3"></i><i class="heat-cell level-4"></i><span>More</span>
+              </div>
+              <div class="study-heatmap-tooltip" id="study-heatmap-tooltip" role="tooltip"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Dashboard Resume Section -->
@@ -667,6 +703,16 @@
                 </button>
                 <span id="ai-save-status" style="font-size: 13px; color: var(--color-success); display: none;">AI settings saved successfully!</span>
               </div>
+            </div>
+          </div>
+
+          <!-- Study Goal Card -->
+          <div class="settings-card">
+            <h3>Weekly Study Goal</h3>
+            <p class="card-desc">Hours you aim to study each week, tracked on the dashboard. Study time counts while a video or audio lesson plays, or while a page, PDF or document is open and you've been active in the last 5 minutes.</p>
+            <div class="add-folder-form">
+              <input type="number" id="weekly-goal-input" class="folder-path-input" min="0.5" max="168" step="0.5" style="max-width: 160px;" aria-label="Weekly study goal in hours">
+              <button class="primary-btn" onclick="saveWeeklyGoal()">Save Goal</button>
             </div>
           </div>
 
