@@ -1,6 +1,3 @@
-// --- API CONFIGURATION ---
-const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3005' : '';
-
 // File types listed under the Lessons tab; all other types are listed under Resources
 const LESSON_TYPES = ['video', 'audio', 'pdf', 'html', 'docx', 'text'];
 // File types that can get AI notes and chat
@@ -235,12 +232,12 @@ async function refreshCatalog(isInitialLoad = false) {
   
   try {
     // Fetch watch folders config
-    const configRes = await fetch(`${API_BASE}/api/config`);
+    const configRes = await fetch(`/api/config`);
     state.config = await configRes.json();
 
     // Fetch AI services configuration
     try {
-      const aiRes = await fetch(`${API_BASE}/api/ai-config`);
+      const aiRes = await fetch(`/api/ai-config`);
       state.aiConfig = await aiRes.json();
     } catch (e) {
       console.warn('Error loading AI config:', e);
@@ -248,14 +245,14 @@ async function refreshCatalog(isInitialLoad = false) {
 
     // Fetch study time history and the weekly goal
     try {
-      const activityRes = await fetch(`${API_BASE}/api/activity`);
+      const activityRes = await fetch(`/api/activity`);
       state.activity = await activityRes.json();
     } catch (e) {
       console.warn('Error loading study time:', e);
     }
     
     // Fetch courses with merged progress
-    const coursesRes = await fetch(`${API_BASE}/api/courses`);
+    const coursesRes = await fetch(`/api/courses`);
     state.courses = await coursesRes.json();
 
     renderDashboard();
@@ -268,13 +265,16 @@ async function refreshCatalog(isInitialLoad = false) {
       const updatedCourse = state.courses.find(c => c.id === state.currentCourse.id);
       if (updatedCourse) {
         state.currentCourse = updatedCourse;
-        // Re-point the open item at its refreshed object too, so its progress isn't stale (e.g. after a reset)
+        // Refresh the open item too, so its progress isn't stale (e.g. after a reset). It keeps its object, with the
+        // refreshed fields copied in: the player and the page and PDF trackers hold on to it
         if (state.currentItem) {
           for (const sec of updatedCourse.sections) {
-            const freshItem = sec.items.find(i => i.path === state.currentItem.path);
-            if (freshItem) {
-              if (state.videoItem === state.currentItem) state.videoItem = freshItem;
-              state.currentItem = freshItem;
+            const index = sec.items.findIndex(i => i.path === state.currentItem.path);
+            if (index !== -1) {
+              const item = state.currentItem;
+              Object.keys(item).forEach(key => delete item[key]);
+              Object.assign(item, sec.items[index]);
+              sec.items[index] = item;
               state.currentSection = sec;
               break;
             }
@@ -338,10 +338,8 @@ function renderDashboard() {
     });
   });
 
-  const totalStudied = Object.values(state.activity.days || {}).reduce((sum, seconds) => sum + seconds, 0);
-  document.getElementById('stat-hours').textContent = `${(totalStudied / 3600).toFixed(1)}h`;
+  renderStudyStats();
   document.getElementById('stat-active-courses').textContent = activeCount;
-  renderStudyActivity();
   document.getElementById('stat-completed-files').textContent = completedCount;
 
   // Set welcome message username/detail
@@ -640,9 +638,11 @@ function tickStudyTime() {
 function flushStudyTime() {
   tickStudyTime();
   const today = localDateKey(new Date());
+  let logged = false;
   for (const [filePath, entry] of studyTime.pending) {
     if (entry.seconds < 1) continue;
     studyTime.pending.delete(filePath);
+    logged = true;
     let seconds = Math.round(entry.seconds);
     state.activity.days[today] = (state.activity.days[today] || 0) + seconds;
     state.activity.courses[entry.courseId] = (state.activity.courses[entry.courseId] || 0) + seconds;
@@ -650,7 +650,7 @@ function flushStudyTime() {
     while (seconds > 0) {
       const chunk = Math.min(300, seconds);
       seconds -= chunk;
-      fetch(`${API_BASE}/api/activity`, {
+      fetch(`/api/activity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePath, seconds: chunk }),
@@ -658,7 +658,7 @@ function flushStudyTime() {
       }).catch(err => console.error('Error saving study time:', err));
     }
   }
-  if (state.view === 'dashboard') renderDashboard();
+  if (logged) renderStudyStats();
 }
 
 function initStudyTime() {
@@ -696,6 +696,13 @@ function heatLevel(seconds) {
   if (seconds < 45 * 60) return 2;
   if (seconds < 90 * 60) return 3;
   return 4;
+}
+
+// Time studied in the sidebar, and the dashboard's Study Activity panel
+function renderStudyStats() {
+  const totalStudied = Object.values(state.activity.days || {}).reduce((sum, seconds) => sum + seconds, 0);
+  document.getElementById('stat-hours').textContent = `${(totalStudied / 3600).toFixed(1)}h`;
+  renderStudyActivity();
 }
 
 function renderStudyActivity() {
@@ -794,7 +801,7 @@ function initHeatmapTooltip() {
 async function saveWeeklyGoal() {
   const input = document.getElementById('weekly-goal-input');
   try {
-    const res = await fetch(`${API_BASE}/api/activity/goal`, {
+    const res = await fetch(`/api/activity/goal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ weeklyGoalHours: parseFloat(input.value) })
@@ -849,18 +856,29 @@ function workspaceProgressText(course) {
   return `${course.progressPercent}% Completed${left >= 60 ? ` · ${formatStudyTime(left)} left` : ''}`;
 }
 
-// While the server measures a new library, fill in lengths as they arrive
+// While the server measures a new library, fill in lengths as they arrive (each poll asks only for the ones
+// measured since the last)
 function watchMediaDurations() {
   const missing = state.courses.some(c => c.sections.some(s => s.items.some(i => isMediaItem(i) && i.duration === undefined)));
   if (state.durationsTimer || !missing) return;
   const startedAt = Date.now();
+  let from = 0;
   state.durationsTimer = setInterval(async () => {
     try {
-      const { durations, pending } = await (await fetch(`${API_BASE}/api/media/durations`)).json();
+      const { durations, pending, next } = await (await fetch(`/api/media/durations?from=${from}`)).json();
+      if (next < from) {
+        from = 0; // The server restarted, so its count started over: ask again for everything
+        return;
+      }
+      from = next;
       let changed = false;
       state.courses.forEach(c => c.sections.forEach(s => s.items.forEach(i => {
-        if (durations[i.path] && i.duration !== durations[i.path]) {
+        if (!isMediaItem(i)) return;
+        if (i.path in durations && i.duration !== durations[i.path]) {
           i.duration = durations[i.path];
+          changed = true;
+        } else if (pending === 0 && i.duration === undefined) {
+          i.duration = null; // Nothing is left to measure, so this one can't be (e.g. ffprobe isn't installed)
           changed = true;
         }
       })));
@@ -907,7 +925,7 @@ async function runGlobalSearch() {
   try {
     const params = new URLSearchParams({ q: query });
     if (kind) params.set('kind', kind);
-    const res = await fetch(`${API_BASE}/api/search?${params}`, { signal: searchRequest.signal });
+    const res = await fetch(`/api/search?${params}`, { signal: searchRequest.signal });
     const data = await res.json();
     renderSearchResults(data.results);
     status.textContent = data.total === 0 ? 'No matches.' : `${data.total} ${data.total === 1 ? 'lesson matches' : 'lessons match'}${data.total > data.results.length ? `; showing the top ${data.results.length}` : ''}.`;
@@ -1487,19 +1505,19 @@ function selectItem(item, section = null) {
     saveItemStarted(item);
   } else if (item.type === 'html') {
     const iframe = document.getElementById('html-frame');
-    iframe.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
+    iframe.src = `/api/file?path=${encodeURIComponent(item.path)}`;
     watchLessonFrame(item);
     saveItemStarted(item);
   } else if (item.type === 'docx') {
     const iframe = document.getElementById('html-frame');
-    iframe.src = `${API_BASE}/api/docx?path=${encodeURIComponent(item.path)}`;
+    iframe.src = `/api/docx?path=${encodeURIComponent(item.path)}`;
     watchLessonFrame(item);
     saveItemStarted(item);
   } else if (item.type === 'text') {
     loadTextViewer(item);
   } else if (item.type === 'image') {
     const imgElement = document.getElementById('image-view-element');
-    imgElement.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
+    imgElement.src = `/api/file?path=${encodeURIComponent(item.path)}`;
     saveItemStarted(item);
   } else if (item.type === 'code') {
     loadTextViewer(item);
@@ -1683,7 +1701,7 @@ function loadVideoPlayer(item) {
   
   // Set video source
   const source = document.createElement('source');
-  source.src = `${API_BASE}/api/video?path=${encodeURIComponent(item.path)}`;
+  source.src = `/api/video?path=${encodeURIComponent(item.path)}`;
   // A source that fails to load reports it here, not on the <video>
   source.addEventListener('error', () => showMediaError(item));
   video.appendChild(source);
@@ -1704,7 +1722,7 @@ function loadVideoPlayer(item) {
 
 function addCaptionsTrack(video, subtitlePath) {
   const track = document.createElement('track');
-  track.src = `${API_BASE}/api/subtitle?path=${encodeURIComponent(subtitlePath)}`;
+  track.src = `/api/subtitle?path=${encodeURIComponent(subtitlePath)}`;
   track.kind = 'captions';
   track.srclang = 'en';
   track.label = 'English';
@@ -1952,7 +1970,7 @@ async function saveVideoProgress(force = false, isCompleted = false) {
     state.lastSavedTime = now;
     
     try {
-      const res = await fetch(`${API_BASE}/api/progress`, {
+      const res = await fetch(`/api/progress`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2078,7 +2096,7 @@ async function loadTextViewer(item) {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`);
+    const res = await fetch(`/api/file?path=${encodeURIComponent(item.path)}`);
     const txt = await res.text();
     
     const ext = item.name.split('.').pop().toLowerCase();
@@ -2124,7 +2142,7 @@ async function saveItemStarted(item) {
   if (item.progress) return; // already has progress log
   
   try {
-    const res = await fetch(`${API_BASE}/api/progress`, {
+    const res = await fetch(`/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2157,7 +2175,7 @@ async function flushReadingPosition() {
   if (!pending) return;
   state.pendingReadingPosition = null;
   try {
-    const res = await fetch(`${API_BASE}/api/progress`, {
+    const res = await fetch(`/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filePath: pending.item.path, ...pending.position }),
@@ -2198,12 +2216,24 @@ function trackPageScroll(item, doc) {
   // Only scrolling the reader does counts: late styles and images also move the page, and could otherwise
   // make it look finished
   let interacted = false;
+  // A page with nothing to scroll is read once the reader does something on it. That's checked only after it has
+  // fully loaded, since late styles and images can still make it longer.
+  let fitChecked = false;
+  const completeIfItFits = () => {
+    if (fitChecked || !interacted || doc.readyState !== 'complete' || state.currentItem !== item) return;
+    fitChecked = true;
+    if (!(item.progress && item.progress.completed) && !findScrollContainer(doc)) {
+      queueReadingPosition(item, { scroll: 1 });
+    }
+  };
   ['wheel', 'keydown', 'touchstart', 'mousedown'].forEach((type) => {
     doc.addEventListener(type, () => {
       interacted = true;
       noteStudyInput();
+      completeIfItFits();
     }, { passive: true, capture: true });
   });
+  doc.defaultView.addEventListener('load', completeIfItFits, { once: true });
   // Input inside the frame doesn't reach the app's own listeners, which keep the study timer going
   doc.addEventListener('mousemove', noteStudyInput, { passive: true });
 
@@ -2297,6 +2327,10 @@ function getPdfViewer() {
           savePdfPage(viewer.pagesCount);
         }
       }, { passive: true });
+      // A PDF with nothing to scroll (e.g. a single slide) is read once the reader does something on it
+      ['wheel', 'pointerdown'].forEach((type) => container.addEventListener(type, () => {
+        if (pdfState.ready && container.scrollHeight - container.clientHeight <= 2) savePdfPage(viewer.pagesCount);
+      }, { passive: true }));
       new ResizeObserver(() => {
         // Zero width while another viewer is showing
         if (pdfState.fitWidth && viewer.pagesCount && container.clientWidth > 0) viewer.currentScaleValue = 'page-width';
@@ -2325,9 +2359,14 @@ async function loadPdfViewer(item) {
   }
   if (pdfState.item !== item) return; // Moved on while the viewer loaded
 
-  if (pdfState.loadingTask) pdfState.loadingTask.destroy();
+  if (pdfState.loadingTask) {
+    // Take the previous PDF off screen before destroying it, so nothing renders from it while this one loads
+    pdf.viewer.setDocument(null);
+    pdf.linkService.setDocument(null);
+    pdfState.loadingTask.destroy();
+  }
   const loadingTask = pdf.pdfjsLib.getDocument({
-    url: `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`,
+    url: `/api/file?path=${encodeURIComponent(item.path)}`,
     worker: pdf.worker,
     isEvalSupported: false,
     cMapUrl: `${PDFJS_BASE}/cmaps/`,
@@ -2439,7 +2478,7 @@ async function saveSkippedState(item, skipped) {
       skipped: skipped
     };
     
-    const res = await fetch(`${API_BASE}/api/progress`, {
+    const res = await fetch(`/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2480,7 +2519,7 @@ async function saveCompletedState(item, completed) {
       }
     }
 
-    const res = await fetch(`${API_BASE}/api/progress`, {
+    const res = await fetch(`/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2596,7 +2635,7 @@ function triggerAutoplayNow() {
 async function revealInFinder() {
   if (!state.currentItem) return;
   try {
-    const res = await fetch(`${API_BASE}/api/open-in-finder`, {
+    const res = await fetch(`/api/open-in-finder`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: state.currentItem.path })
@@ -2612,7 +2651,7 @@ async function revealInFinder() {
 async function openInSystem() {
   if (!state.currentItem) return;
   try {
-    const res = await fetch(`${API_BASE}/api/open-in-system`, {
+    const res = await fetch(`/api/open-in-system`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: state.currentItem.path })
@@ -2679,7 +2718,7 @@ async function saveAiConfig() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch(`${API_BASE}/api/ai-config`, {
+    const res = await fetch(`/api/ai-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ llmModel })
@@ -2720,7 +2759,7 @@ async function addNewFolder() {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/config`, {
+    const res = await fetch(`/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: folderPath })
@@ -2745,7 +2784,7 @@ async function addNewFolder() {
 
 async function removeFolder(folderPath) {
   try {
-    const res = await fetch(`${API_BASE}/api/config/remove`, {
+    const res = await fetch(`/api/config/remove`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: folderPath })
@@ -2768,7 +2807,7 @@ async function confirmResetProgress() {
   if (!ans) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/progress/reset`, { method: 'POST' });
+    const res = await fetch(`/api/progress/reset`, { method: 'POST' });
     if (res.ok) {
       showToast('All progress reset successfully');
       await refreshCatalog();
@@ -2786,7 +2825,7 @@ async function confirmResetCourseProgress(event) {
   if (!ans) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/courses/reset`, {
+    const res = await fetch(`/api/courses/reset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ courseId: state.currentCourse.id })
@@ -2808,7 +2847,7 @@ async function confirmResetCourseProgressCard(event, courseId, courseTitle) {
   if (!ans) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/courses/reset`, {
+    const res = await fetch(`/api/courses/reset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ courseId: courseId })
@@ -2831,7 +2870,7 @@ async function confirmWatchCourseProgress(event) {
   if (!ans) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/courses/complete`, {
+    const res = await fetch(`/api/courses/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ courseId: state.currentCourse.id })
@@ -2853,7 +2892,7 @@ async function confirmWatchCourseProgressCard(event, courseId, courseTitle) {
   if (!ans) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/courses/complete`, {
+    const res = await fetch(`/api/courses/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ courseId: courseId })
@@ -2967,6 +3006,7 @@ async function loadVideoMetadata(item) {
   
   const isVideo = isMediaItem(item);
   state.transcriptSegments = [];
+  state.currentHasTranscript = false; // Until this item's metadata says otherwise
   updateRetranscribeButton(item, false);
   transcriptBody.innerHTML = `<p class="empty-pane-msg">Checking for ${isVideo ? 'transcript' : 'extracted text'}...</p>`;
   summaryBody.innerHTML = '<p class="empty-pane-msg">Checking for summary...</p>';
@@ -2999,10 +3039,9 @@ async function loadVideoMetadata(item) {
   }
   renderChatMessages();
   
-  const hasAi = state.aiConfig && state.aiConfig.llmConfigured && (!isMediaItem(item) || state.aiConfig.transcriptionConfigured);
 
   try {
-    const res = await fetch(`${API_BASE}/api/video/metadata?path=${encodeURIComponent(item.path)}`);
+    const res = await fetch(`/api/video/metadata?path=${encodeURIComponent(item.path)}`);
     if (!res.ok) throw new Error('Failed to load video metadata');
     
     const data = await res.json();
@@ -3029,7 +3068,7 @@ async function loadVideoMetadata(item) {
       summaryBody.innerHTML = '<p class="empty-pane-msg">No summary available. Generate AI Notes to create one.</p>';
       
       // Auto-trigger generation for current item if AI services are configured
-      if (!isGenerating && hasAi) {
+      if (!isGenerating && canMakeAiNotes(item, data.hasTranscript)) {
         if (!state.autoTriggeredGenerations) {
           state.autoTriggeredGenerations = new Set();
         }
@@ -3042,17 +3081,19 @@ async function loadVideoMetadata(item) {
     }
 
     // Trigger pre-generation for next 5 and previous 5 neighbors in the background
-    if (hasAi) {
+    if (state.aiConfig && state.aiConfig.llmConfigured) {
       const flat = getEligibleItemsList();
       const index = flat.findIndex(i => i.path === item.path);
       if (index !== -1) {
         const nextFive = flat.slice(index + 1, index + 6);
         const prevFive = flat.slice(Math.max(0, index - 5), index);
-        const neighborPaths = [...nextFive, ...prevFive].map(i => i.path);
+        // Lectures that would need transcribing are left out when Modal isn't set up (whether they have a
+        // transcript isn't known here)
+        const neighborPaths = [...nextFive, ...prevFive].filter(i => canMakeAiNotes(i, false)).map(i => i.path);
 
         if (neighborPaths.length > 0) {
           console.log(`[Auto] Requesting background pre-generation for ${neighborPaths.length} neighbors...`);
-          fetch(`${API_BASE}/api/video/pregenerate-summaries`, {
+          fetch(`/api/video/pregenerate-summaries`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ paths: neighborPaths })
@@ -3153,6 +3194,14 @@ function updateTranscriptHighlight(currentTime) {
   }
 }
 
+// Whether AI notes can be made for an item: Fireworks writes them, and only a lecture with neither a transcript nor
+// subtitles has to be transcribed on Modal first
+function canMakeAiNotes(item, hasTranscript) {
+  const ai = state.aiConfig || {};
+  const needsTranscription = isMediaItem(item) && !item.subtitlePath && !hasTranscript;
+  return !!ai.llmConfigured && (!needsTranscription || !!ai.transcriptionConfigured);
+}
+
 // Lectures transcribed before captions existed only kept paragraph times: offer to transcribe them again
 function updateRetranscribeButton(item, hasTranscript) {
   const btn = document.getElementById('btn-retranscribe');
@@ -3187,8 +3236,8 @@ async function generateTranscriptAndSummaryAction(options = {}) {
   
   const isVideo = isMediaItem(state.currentItem);
   
-  // Check settings configuration first
-  if (!state.aiConfig || !state.aiConfig.llmConfigured || (isVideo && !state.aiConfig.transcriptionConfigured)) {
+  // Check settings configuration first (re-transcribing ignores the transcript a lecture has)
+  if (!canMakeAiNotes(state.currentItem, state.currentHasTranscript && !options.retranscribe)) {
     const missingSetting = !state.aiConfig || !state.aiConfig.llmConfigured
       ? 'Fireworks AI'
       : 'Modal transcription';
@@ -3215,7 +3264,7 @@ async function generateTranscriptAndSummaryAction(options = {}) {
   }
   
   try {
-    const res = await fetch(`${API_BASE}/api/video/generate-transcript`, {
+    const res = await fetch(`/api/video/generate-transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: targetPath, retranscribe: options.retranscribe === true })
@@ -3652,7 +3701,7 @@ async function loadCourseSummary() {
   genBtn.style.display = '';
 
   try {
-    const res = await fetch(`${API_BASE}/api/course/summary-status?courseId=${encodeURIComponent(state.currentCourse.id)}`);
+    const res = await fetch(`/api/course/summary-status?courseId=${encodeURIComponent(state.currentCourse.id)}`);
     if (!res.ok) throw new Error('Failed to load course summary status');
     
     const data = await res.json();
@@ -3745,7 +3794,7 @@ async function generateCourseSummaryAction() {
   if (card) card.style.display = 'none';
 
   try {
-    const res = await fetch(`${API_BASE}/api/course/generate-summary`, {
+    const res = await fetch(`/api/course/generate-summary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -3782,7 +3831,7 @@ function startPollingCourseSummary() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/course/summary-status?courseId=${encodeURIComponent(state.currentCourse.id)}`);
+      const res = await fetch(`/api/course/summary-status?courseId=${encodeURIComponent(state.currentCourse.id)}`);
       if (!res.ok) throw new Error('Polling status failed');
 
       const data = await res.json();
@@ -3894,7 +3943,7 @@ async function executeChatMessage(messageText) {
   messagesBody.scrollTop = messagesBody.scrollHeight;
 
   try {
-    const res = await fetch(`${API_BASE}/api/video/chat`, {
+    const res = await fetch(`/api/video/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4023,7 +4072,7 @@ async function executeCourseChatMessage(messageText) {
   messagesBody.scrollTop = messagesBody.scrollHeight;
 
   try {
-    const res = await fetch(`${API_BASE}/api/course/chat`, {
+    const res = await fetch(`/api/course/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -11,8 +11,21 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'course-viewer-test-'));
 const cacheDir = path.join(tmpDir, 'cache');
 process.env.COURSE_VIEWER_DB = path.join(tmpDir, 'db.json');
 process.env.COURSE_VIEWER_CACHE = cacheDir;
+// No real AI services: a stand-in Fireworks key (the .env file never overrides variables that are already set) for
+// the fake Fireworks API below, and no Modal credentials, so nothing is ever sent to Modal
+process.env.FIREWORKS_API_KEY = 'test-key';
+process.env.MODAL_TOKEN_ID = '';
+process.env.MODAL_TOKEN_SECRET = '';
+process.env.MODAL_CONFIG_PATH = path.join(tmpDir, 'no-modal.toml');
 fs.writeFileSync(process.env.COURSE_VIEWER_DB, JSON.stringify({ folders: [], progress: {}, aiConfig: { llmModel: '' } }));
-const { app, ensureSearchIndex, retrieveCourseExcerpts } = require('../server');
+const { app, ensureSearchIndex, retrieveCourseExcerpts, getLessonText, getRelativePathFromAbsolute } = require('../server');
+
+// Fireworks stand-in: every chat completion streams this reply, the way the real API does
+const FAKE_NOTES = 'Stand-in notes.';
+const realFetch = global.fetch;
+global.fetch = (url, options) => (String(url).startsWith('https://api.fireworks.ai/')
+  ? Promise.resolve(new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: FAKE_NOTES }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
+  : realFetch(url, options));
 
 const libraryDir = path.join(tmpDir, 'library');
 const courseDir = path.join(libraryDir, 'Course A');
@@ -47,6 +60,7 @@ beforeAll(async () => {
   fs.writeFileSync(`${clipBase}.transcript.txt`, '[00:00] Welcome to the course.\n\n' +
     '[00:30] Neuroplasticity is the brain\'s ability to change with practice.\n');
   fs.writeFileSync(`${clipBase}.summary.md`, '## Key takeaways\n- [00:30](timestamp:clip.ts#30) Neuroplasticity lets the brain rewire itself.\n');
+  fs.writeFileSync(path.join(courseDir, 'course.summary.md'), '# Course A\n\n- Synaptic pruning removes unused connections.\n');
   if (hasFfmpeg) {
     execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x48:rate=5',
       '-f', 'lavfi', '-i', 'sine=duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-f', 'mpegts', streamPath]);
@@ -74,7 +88,10 @@ afterAll(async () => {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  delete process.env.COURSE_VIEWER_DB;
+  global.fetch = realFetch;
+  for (const name of ['COURSE_VIEWER_DB', 'COURSE_VIEWER_CACHE', 'FIREWORKS_API_KEY', 'MODAL_TOKEN_ID', 'MODAL_TOKEN_SECRET', 'MODAL_CONFIG_PATH']) {
+    delete process.env[name];
+  }
 });
 
 describe('video streaming', () => {
@@ -215,6 +232,18 @@ describe('reading progress', () => {
     const prog = await (await postJson('/api/progress', { filePath: path.join(courseDir, 'other.pdf'), page: 99, pages: 4 })).json();
     expect(prog).toMatchObject({ page: 4, pages: 4 });
   });
+
+  it('starts a page over when it is marked in-progress again', async () => {
+    const readingPath = path.join(courseDir, 'reading.html');
+    await postJson('/api/progress', { filePath: readingPath, scroll: 0.97 });
+    let prog = await (await postJson('/api/progress', { filePath: readingPath, completed: false })).json();
+    expect(prog).toMatchObject({ completed: false, percent: 0 });
+    expect(prog.scroll).toBeUndefined();
+
+    // So scrolling partway in no longer completes it
+    prog = await (await postJson('/api/progress', { filePath: readingPath, scroll: 0.4 })).json();
+    expect(prog).toMatchObject({ completed: false, percent: 40 });
+  });
 });
 
 describe('study time', () => {
@@ -301,6 +330,71 @@ describe('search', () => {
     const excerpts = retrieveCourseExcerpts(Buffer.from(courseDir).toString('base64url'), 'What is neuroplasticity?');
     expect(excerpts).toContain('Lecture "clip.ts" at [00:30](timestamp:clip.ts#30)');
   });
+
+  it('labels course chat excerpts from the course summary as such', async () => {
+    await ensureSearchIndex();
+    const excerpts = retrieveCourseExcerpts(Buffer.from(courseDir).toString('base64url'), 'synaptic pruning');
+    expect(excerpts).toMatch(/^\[1\] Course summary\n.*Synaptic pruning/);
+    expect(excerpts).not.toContain('"null"');
+  });
+});
+
+describe('AI notes', () => {
+  const lessonsDir = path.join(libraryDir, 'Course C');
+  const lecturePath = path.join(lessonsDir, 'lecture.mp3');
+  const quietPath = path.join(lessonsDir, 'quiet.mp3');
+  const articlePath = path.join(lessonsDir, 'article.html');
+  const linkPath = path.join(lessonsDir, 'link.txt');
+  const quiet = { log: () => {} };
+
+  beforeAll(() => {
+    fs.mkdirSync(lessonsDir, { recursive: true });
+    fs.writeFileSync(lecturePath, Buffer.alloc(size, 7));
+    fs.writeFileSync(path.join(lessonsDir, 'lecture.srt'), '1\n00:00:01,000 --> 00:00:03,000\nGlial cells support neurons.\n');
+    fs.writeFileSync(quietPath, Buffer.alloc(size, 7)); // No transcript or subtitles, and Modal isn't configured here
+    fs.writeFileSync(articlePath, '<h1>Myelin</h1><p>Myelin speeds up signals.</p>');
+    fs.writeFileSync(linkPath, 'https://example.com/lesson\n');
+  });
+
+  it('makes a lecture\'s notes from its subtitles', async () => {
+    const res = await postJson('/api/video/generate-transcript', { path: lecturePath });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toMatchObject({ summary: FAKE_NOTES, subtitlePath: path.join(lessonsDir, 'lecture.srt') });
+    expect(data.transcript).toBe('[00:01] Glial cells support neurons.');
+  });
+
+  it('reads a document once, then reuses the saved text', async () => {
+    const sheetPath = path.join(tmpDir, 'sheet.md');
+    fs.writeFileSync(sheetPath, 'Dendrites receive signals.');
+    expect((await getLessonText(sheetPath, 'text', quiet)).text).toBe('Dendrites receive signals.');
+    fs.writeFileSync(sheetPath, 'Changed since.');
+    expect((await getLessonText(sheetPath, 'text', quiet)).text).toBe('Dendrites receive signals.');
+  });
+
+  it('skips files with nothing to make notes from', async () => {
+    await expect(getLessonText(linkPath, 'text', quiet)).rejects.toMatchObject({ skip: true });
+    await expect(getLessonText(quietPath, 'audio', quiet)).rejects.toMatchObject({ skip: true });
+  });
+
+  it('summarizes a course, listing the files it had to skip', async () => {
+    const courseId = Buffer.from(lessonsDir).toString('base64url');
+    const selectedFiles = [lecturePath, quietPath, articlePath, linkPath];
+    expect((await postJson('/api/course/generate-summary', { courseId, selectedFiles })).status).toBe(200);
+    let job;
+    for (let i = 0; i < 50; i++) {
+      job = await (await fetch(`${baseUrl}/api/course/summary-status?courseId=${courseId}`)).json();
+      if (job.status !== 'processing') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(job.status).toBe('completed');
+    const [notes, skipped] = job.summary.split('**Skipped Files:**');
+    expect(notes).toContain(FAKE_NOTES);
+    expect(skipped).toContain('- link.txt');
+    expect(skipped).toContain('- quiet.mp3');
+    expect(skipped).not.toContain('article.html');
+    expect(fs.readFileSync(path.join(lessonsDir, 'article.summary.md'), 'utf8')).toBe(FAKE_NOTES);
+  });
 });
 
 describe('access control', () => {
@@ -342,5 +436,21 @@ describe('course reset', () => {
     const progress = await (await fetch(`${baseUrl}/api/progress`)).json();
     expect(progress[videoPath]).toBeDefined();
     expect(progress[looseVideoPath]).toBeUndefined();
+  });
+});
+
+describe('timestamp links', () => {
+  it('name a lesson by its path in its course, even when watched folders share a prefix', async () => {
+    const otherLibrary = `${libraryDir}-2`;
+    const lecture = path.join(otherLibrary, 'Course B', 'Week 1', 'intro.mp4');
+    fs.mkdirSync(path.dirname(lecture), { recursive: true });
+    fs.writeFileSync(lecture, Buffer.alloc(10, 7));
+    expect((await postJson('/api/config', { path: otherLibrary })).status).toBe(200);
+    try {
+      expect(getRelativePathFromAbsolute(lecture)).toBe('Week 1/intro.mp4');
+      expect(getRelativePathFromAbsolute(looseVideoPath)).toBe('loose.mp4');
+    } finally {
+      await postJson('/api/config/remove', { path: otherLibrary });
+    }
   });
 });

@@ -121,12 +121,17 @@ if (fs.existsSync(DB_FILE)) {
   saveDb();
 }
 
+// Write a temp file and rename it over the target, so a crash mid-write can't leave a truncated file
+function writeFileAtomic(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpFile = `${filePath}.tmp`;
+  fs.writeFileSync(tmpFile, data, 'utf8');
+  fs.renameSync(tmpFile, filePath);
+}
+
 function saveDb() {
   try {
-    // Write a temp file and rename it over db.json, so a crash mid-write can't leave a truncated file
-    const tmpFile = `${DB_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
-    fs.renameSync(tmpFile, DB_FILE);
+    writeFileAtomic(DB_FILE, JSON.stringify(db, null, 2));
   } catch (err) {
     console.error('Error saving db.json', err);
   }
@@ -240,28 +245,27 @@ try {
   // Nothing measured yet
 }
 const durationQueue = new Set();
+// Paths in the order they were measured this run, so the app can ask for just the lengths it hasn't seen yet
+const measuredLog = [];
 let measuringDurations = false;
 let ffprobeMissing = false;
 
-// Seconds; null if ffprobe couldn't read the file; undefined (left out of the JSON) while still being measured
+// Seconds; null if it can't be measured (ffprobe couldn't read the file, or isn't installed); undefined (left out of
+// the JSON) while still being measured
 function getMediaDuration(filePath, stat) {
   const known = mediaDurations[filePath];
   if (known && known.size === stat.size && known.mtimeMs === stat.mtimeMs) {
     return known.duration;
   }
-  if (!ffprobeMissing) {
-    durationQueue.add(filePath);
-    measureDurations();
-  }
+  if (ffprobeMissing) return null;
+  durationQueue.add(filePath);
+  measureDurations();
   return undefined;
 }
 
 function saveDurations() {
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const tmpFile = `${DURATIONS_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(mediaDurations), 'utf8');
-    fs.renameSync(tmpFile, DURATIONS_FILE);
+    writeFileAtomic(DURATIONS_FILE, JSON.stringify(mediaDurations));
   } catch (err) {
     console.error('Error saving lesson lengths:', err);
   }
@@ -290,12 +294,14 @@ async function measureDurations() {
       } catch (err) {
         if (err.code === 'ENOENT') {
           ffprobeMissing = true;
+          durationQueue.clear(); // None of the rest can be measured either, so none of it is pending
           console.warn('[ffprobe] Not found: lesson lengths will only be known once each lesson has played.');
           break;
         }
         // Unreadable file: recorded below, so it isn't measured again on every scan
       }
       mediaDurations[filePath] = { size: stat.size, mtimeMs: stat.mtimeMs, duration };
+      measuredLog.push(filePath);
       if (++measured % 50 === 0) saveDurations();
     }
   };
@@ -557,13 +563,15 @@ app.get('/api/courses', (req, res) => {
   res.send(courses);
 });
 
-// Lengths measured so far, which the app fills in while ffprobe works through a new library
+// Lengths measured since the app last asked (from: the previous reply's `next`), which it fills in while ffprobe
+// works through a new library. null: ffprobe couldn't read the file.
 app.get('/api/media/durations', (req, res) => {
+  const from = Math.max(0, parseInt(req.query.from, 10) || 0);
   const durations = {};
-  for (const [filePath, info] of Object.entries(mediaDurations)) {
-    if (info.duration) durations[filePath] = info.duration;
+  for (const filePath of measuredLog.slice(from)) {
+    durations[filePath] = mediaDurations[filePath].duration;
   }
-  res.send({ durations, pending: durationQueue.size + (measuringDurations ? 1 : 0) });
+  res.send({ durations, next: measuredLog.length, pending: durationQueue.size + (measuringDurations ? 1 : 0) });
 });
 
 // --- STUDY TIME ---
@@ -693,6 +701,13 @@ app.post('/api/progress', (req, res) => {
         prog.percent = Math.min(100, Math.round((prog.currentTime / prog.duration) * 100));
       } else {
         prog.percent = 0;
+      }
+      // Back in progress, a page or PDF starts over (as a video does) rather than reopening at its end, where the
+      // next scroll would complete it again
+      if (!readingMoved) {
+        delete prog.scroll;
+        delete prog.page;
+        delete prog.pages;
       }
     }
   }
@@ -1298,19 +1313,10 @@ function cleanHtmlText(html) {
   return clean.replace(/\n\s*\n+/g, '\n\n').trim();
 }
 
-// Helper to resolve relative path of a video within a course
+// Helper to resolve relative path of a video within a course, as timestamp: links name it (e.g. "Section 1/Video.mp4")
 function getRelativePathFromAbsolute(videoPath) {
-  const folders = db.folders || [];
-  for (const folder of folders) {
-    if (videoPath.startsWith(folder + path.sep) || videoPath.startsWith(folder)) {
-      const relToWatch = path.relative(folder, videoPath);
-      const segments = relToWatch.split(path.sep);
-      if (segments.length > 1) {
-        return segments.slice(1).join('/');
-      }
-    }
-  }
-  return path.basename(videoPath);
+  const coursePath = getCoursePathForFile(videoPath);
+  return coursePath ? path.relative(coursePath, videoPath).split(path.sep).join('/') : path.basename(videoPath);
 }
 
 // Convert timestamp string like "12:35" or "01:12:35" to total seconds
@@ -1639,6 +1645,66 @@ async function transcribeVideoWithModal(videoPath) {
   }
 }
 
+// The text a lesson's AI notes are made from, saved as <name>.transcript.txt for chat and search: its saved text,
+// else the document's text, or for lectures their subtitles, else a Whisper transcription on Modal (which also saves
+// captions). retranscribe: transcribe a lecture again even if it has a transcript (older ones have no captions).
+// Returns { text, subtitlePath } (a lecture's subtitles or new captions); throws an error with `skip` set when the
+// file has nothing to make notes from.
+async function getLessonText(filePath, type, { retranscribe = false, log = console.log } = {}) {
+  const baseWithoutExt = filePath.slice(0, -path.extname(filePath).length);
+  const transcriptPath = baseWithoutExt + '.transcript.txt';
+  const existingTranscript = readTextIfExists(transcriptPath);
+  const nothingToSummarize = (message) => Object.assign(new Error(message), { skip: true });
+
+  if (!isMediaType(type)) {
+    if (existingTranscript.trim()) {
+      log('Using its saved text.');
+      return { text: existingTranscript, subtitlePath: null };
+    }
+    log('Extracting its text...');
+    let text;
+    if (type === 'html') {
+      text = cleanHtmlText(fs.readFileSync(filePath, 'utf8'));
+    } else if (type === 'pdf') {
+      text = (await pdfParse(fs.readFileSync(filePath))).text || '';
+    } else if (type === 'docx') {
+      text = (await mammoth.extractRawText({ path: filePath })).value;
+    } else if (type === 'text' || type === 'code') {
+      text = fs.readFileSync(filePath, 'utf8');
+    } else {
+      throw new Error('AI notes are not available for this file type.');
+    }
+    if (!text.trim()) {
+      throw nothingToSummarize('This file has no text to make notes from.');
+    }
+    if (/^https?:\/\/\S+$/i.test(text.trim())) {
+      throw nothingToSummarize('This file only contains a link.');
+    }
+    fs.writeFileSync(transcriptPath, text, 'utf8');
+    return { text, subtitlePath: null };
+  }
+
+  const subtitlePath = [baseWithoutExt + '.vtt', baseWithoutExt + '.srt'].find((p) => fs.existsSync(p)) || null;
+  if (!retranscribe && existingTranscript.trim()) {
+    log('Using its transcript.');
+    return { text: existingTranscript, subtitlePath };
+  }
+  if (subtitlePath) {
+    log('Using its subtitles.');
+    const text = cleanSubtitleText(fs.readFileSync(subtitlePath, 'utf8'));
+    fs.writeFileSync(transcriptPath, text, 'utf8');
+    return { text, subtitlePath };
+  }
+  if (!isTranscriptionConfigured()) {
+    throw nothingToSummarize('This lecture has no transcript or subtitles, and Modal is not configured. Run "modal token set" (or set MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env) to enable transcription.');
+  }
+  log('Transcribing its audio on Modal (this can take a moment)...');
+  const { transcript, captions } = await transcribeVideoWithModal(filePath);
+  // Saved before anything else can fail, so a finished (paid) transcription is never thrown away
+  fs.writeFileSync(transcriptPath, transcript, 'utf8');
+  return { text: transcript, subtitlePath: saveCaptions(filePath, captions) };
+}
+
 // Global state for active course summary background jobs
 const activeJobs = {};
 
@@ -1709,138 +1775,22 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
         notesContent = fs.readFileSync(itemSummaryPath, 'utf8');
         hasNotes = true;
       } else {
-        if (isMediaType(item.type)) {
-          const videoTranscriptPath = baseWithoutExt + '.transcript.txt';
-          let transcript = '';
-          if (fs.existsSync(videoTranscriptPath)) {
-            try {
-              transcript = fs.readFileSync(videoTranscriptPath, 'utf8').trim();
-            } catch (err) {
-              logMessage(`[Error] Failed to read transcript for "${item.name}": ${err.message}`);
-            }
-          }
-
-          if (transcript) {
-            logMessage(`Found existing transcript for "${item.name}". Generating summary...`);
-            try {
-              const summary = await summarizeContent(transcript, 'video', item.relativePath);
-              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-              notesContent = summary;
-              hasNotes = true;
-            } catch (err) {
-              logMessage(`[Error] Failed to generate summary from transcript for "${item.name}": ${err.message}`);
-            }
-          } else if (item.subtitlePath && fs.existsSync(item.subtitlePath)) {
-            logMessage(`Found subtitle track for "${item.name}". Extracting transcript and generating notes...`);
-            try {
-              const subtitleContent = fs.readFileSync(item.subtitlePath, 'utf8');
-              const cleanedText = cleanSubtitleText(subtitleContent);
-              const summary = await summarizeContent(cleanedText, 'video', item.relativePath);
-              
-              fs.writeFileSync(videoTranscriptPath, cleanedText, 'utf8');
-              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-              
-              notesContent = summary;
-              hasNotes = true;
-            } catch (err) {
-              logMessage(`[Error] Failed to process subtitles for "${item.name}": ${err.message}`);
-            }
+        try {
+          const { text } = await getLessonText(item.path, item.type, {
+            log: (message) => logMessage(`"${item.name}": ${message}`)
+          });
+          const summary = isMediaType(item.type)
+            ? await summarizeContent(text, 'video', item.relativePath)
+            : await summarizeContent(text, 'document');
+          fs.writeFileSync(itemSummaryPath, summary, 'utf8');
+          notesContent = summary;
+          hasNotes = true;
+        } catch (err) {
+          if (err.skip) {
+            logMessage(`[Warning] Skipping "${item.name}": ${err.message}`);
+            skippedFiles.push(item.name);
           } else {
-            // No subtitles/notes. Transcribe the audio on Modal if configured
-            if (isTranscriptionConfigured()) {
-              logMessage(`No notes or subtitles found for "${item.name}". Transcribing audio on Modal (this can take a moment)...`);
-              try {
-                const { transcript, captions } = await transcribeVideoWithModal(item.path);
-                const summary = await summarizeContent(transcript, 'video', item.relativePath);
-
-                fs.writeFileSync(videoTranscriptPath, transcript, 'utf8');
-                saveCaptions(item.path, captions);
-                fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-                
-                notesContent = summary;
-                hasNotes = true;
-              } catch (err) {
-                logMessage(`[Error] Transcription failed for "${item.name}": ${err.message}`);
-              }
-            } else {
-              logMessage(`[Warning] Skipping "${item.name}" because it has no notes or subtitles, and Modal transcription is not configured.`);
-              skippedFiles.push(item.name);
-            }
-          }
-        } else if (item.type === 'text') {
-          logMessage(`Reading Markdown content for "${item.name}" and generating notes...`);
-          try {
-            const content = fs.readFileSync(item.path, 'utf8');
-            const trimmed = content.trim();
-            const isUrl = /^(https?:\/\/[^\s]+)$/i.test(trimmed);
-            if (trimmed && !isUrl) {
-              const summary = await summarizeContent(content, 'document');
-              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-              notesContent = summary;
-              hasNotes = true;
-            } else if (isUrl) {
-              logMessage(`[Warning] Skipping text file "${item.name}" because it only contains a URL.`);
-              skippedFiles.push(item.name);
-            } else {
-              logMessage(`[Warning] Skipping empty text file "${item.name}".`);
-            }
-          } catch (err) {
-            logMessage(`[Error] Failed to process text file "${item.name}": ${err.message}`);
-          }
-        } else if (item.type === 'html') {
-          logMessage(`Reading HTML content for "${item.name}", cleaning markup, and generating notes...`);
-          try {
-            const htmlContent = fs.readFileSync(item.path, 'utf8');
-            const cleanedText = cleanHtmlText(htmlContent);
-            if (cleanedText.trim()) {
-              const summary = await summarizeContent(cleanedText, 'document');
-              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-              notesContent = summary;
-              hasNotes = true;
-            } else {
-              logMessage(`[Warning] Skipping empty HTML file "${item.name}".`);
-            }
-          } catch (err) {
-            logMessage(`[Error] Failed to process HTML file "${item.name}": ${err.message}`);
-          }
-        } else if (item.type === 'pdf') {
-          logMessage(`Reading PDF content for "${item.name}" and generating notes...`);
-          try {
-            const dataBuffer = fs.readFileSync(item.path);
-            const pdfData = await pdfParse(dataBuffer);
-            const text = pdfData.text || '';
-            if (text.trim()) {
-              const summary = await summarizeContent(text, 'document');
-              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-
-              // Save the extracted text to transcript.txt so users can chat with it
-              const videoTranscriptPath = baseWithoutExt + '.transcript.txt';
-              fs.writeFileSync(videoTranscriptPath, text, 'utf8');
-
-              notesContent = summary;
-              hasNotes = true;
-            } else {
-              logMessage(`[Warning] Skipping empty PDF file "${item.name}".`);
-            }
-          } catch (err) {
-            logMessage(`[Error] Failed to process PDF file "${item.name}": ${err.message}`);
-          }
-        } else if (item.type === 'docx') {
-          logMessage(`Reading Word document "${item.name}" and generating notes...`);
-          try {
-            const { value: text } = await mammoth.extractRawText({ path: item.path });
-            if (text.trim()) {
-              const summary = await summarizeContent(text, 'document');
-              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
-              // Save the extracted text to transcript.txt so users can chat with it
-              fs.writeFileSync(baseWithoutExt + '.transcript.txt', text, 'utf8');
-              notesContent = summary;
-              hasNotes = true;
-            } else {
-              logMessage(`[Warning] Skipping empty Word document "${item.name}".`);
-            }
-          } catch (err) {
-            logMessage(`[Error] Failed to process Word document "${item.name}": ${err.message}`);
+            logMessage(`[Error] Failed to generate notes for "${item.name}": ${err.message}`);
           }
         }
       }
@@ -1913,7 +1863,7 @@ ${compilationText}
 
     // Append a list of skipped files if any
     if (skippedFiles.length > 0) {
-      masterSummary += `\n\n---\n\n> [!NOTE]\n> **Skipped Files:** The following file(s) did not have transcripts or subtitles, Modal transcription was not configured, and they were omitted from this summary:\n` + 
+      masterSummary += `\n\n---\n\n> [!NOTE]\n> **Skipped Files:** The following file(s) had nothing to make notes from (no transcript or subtitles while Modal transcription is not configured, no text, or only a link), and they were omitted from this summary:\n` + 
         skippedFiles.map(name => `> - ${name}`).join('\n') + '\n';
     }
 
@@ -1985,109 +1935,19 @@ async function generateSummaryForPath(filePath, { retranscribe = false } = {}) {
 
     const ext = path.extname(filePath).toLowerCase();
     const baseWithoutExt = filePath.slice(0, -ext.length);
-    const transcriptPath = baseWithoutExt + '.transcript.txt';
     const summaryPath = baseWithoutExt + '.summary.md';
 
-    let transcript = '';
-    let existingTranscript = '';
-    if (fs.existsSync(transcriptPath)) {
-      try {
-        existingTranscript = fs.readFileSync(transcriptPath, 'utf8');
-      } catch (err) {
-        console.error('Error reading transcript file:', err);
-      }
-    }
-
     const type = getFileType(filePath);
-    if (type === 'html') {
-      if (existingTranscript && existingTranscript.trim()) {
-        transcript = existingTranscript;
-      } else {
-        const htmlContent = fs.readFileSync(filePath, 'utf8');
-        transcript = cleanHtmlText(htmlContent);
-        fs.writeFileSync(transcriptPath, transcript, 'utf8');
-      }
-      const summary = await summarizeContent(transcript, 'document');
-      fs.writeFileSync(summaryPath, summary, 'utf8');
-
-      return { transcript, summary };
-    } else if (type === 'pdf') {
-      if (existingTranscript && existingTranscript.trim()) {
-        transcript = existingTranscript;
-      } else {
-        const dataBuffer = fs.readFileSync(filePath);
-        const pdfData = await pdfParse(dataBuffer);
-        transcript = pdfData.text || '';
-        if (!transcript.trim()) {
-          throw new Error('PDF contains no extractable text.');
-        }
-        fs.writeFileSync(transcriptPath, transcript, 'utf8');
-      }
-      const summary = await summarizeContent(transcript, 'document');
-      fs.writeFileSync(summaryPath, summary, 'utf8');
-
-      return { transcript, summary };
-    } else if (type === 'docx') {
-      if (existingTranscript && existingTranscript.trim()) {
-        transcript = existingTranscript;
-      } else {
-        transcript = (await mammoth.extractRawText({ path: filePath })).value;
-        if (!transcript.trim()) {
-          throw new Error('Word document contains no text.');
-        }
-        fs.writeFileSync(transcriptPath, transcript, 'utf8');
-      }
-      const summary = await summarizeContent(transcript, 'document');
-      fs.writeFileSync(summaryPath, summary, 'utf8');
-
-      return { transcript, summary };
-    } else if (type === 'text' || type === 'code') {
-      if (existingTranscript && existingTranscript.trim()) {
-        transcript = existingTranscript;
-      } else {
-        transcript = fs.readFileSync(filePath, 'utf8');
-        fs.writeFileSync(transcriptPath, transcript, 'utf8');
-      }
-      const summary = await summarizeContent(transcript, 'document');
-      fs.writeFileSync(summaryPath, summary, 'utf8');
-
-      return { transcript, summary };
-    }
-
-    if (!isMediaType(type)) {
-      throw new Error('AI notes are not available for this file type.');
-    }
-
-    // Video and audio: use the transcript, else subtitles, else transcribe on Modal
-    let subtitlePath = '';
-    if (fs.existsSync(baseWithoutExt + '.vtt')) {
-      subtitlePath = baseWithoutExt + '.vtt';
-    } else if (fs.existsSync(baseWithoutExt + '.srt')) {
-      subtitlePath = baseWithoutExt + '.srt';
-    }
-
-    if (!retranscribe && existingTranscript && existingTranscript.trim()) {
-      transcript = existingTranscript;
-    } else if (subtitlePath) {
-      console.log(`[Transcript] Found subtitles for ${filePath}. Parsing track content...`);
-      const subtitleContent = fs.readFileSync(subtitlePath, 'utf8');
-      transcript = cleanSubtitleText(subtitleContent);
-      fs.writeFileSync(transcriptPath, transcript, 'utf8');
-    } else {
-      if (!isTranscriptionConfigured()) {
-        throw new Error('Modal is not configured. Run "modal token set" (or set MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env) to enable transcription.');
-      }
-      const transcription = await transcribeVideoWithModal(filePath);
-      transcript = transcription.transcript;
-      fs.writeFileSync(transcriptPath, transcript, 'utf8');
-      subtitlePath = saveCaptions(filePath, transcription.captions);
-    }
-
-    const relPath = getRelativePathFromAbsolute(filePath);
-    const summary = await summarizeContent(transcript, 'video', relPath);
+    const { text: transcript, subtitlePath } = await getLessonText(filePath, type, {
+      retranscribe,
+      log: (message) => console.log(`[Notes] ${path.basename(filePath)}: ${message}`)
+    });
+    const summary = isMediaType(type)
+      ? await summarizeContent(transcript, 'video', getRelativePathFromAbsolute(filePath))
+      : await summarizeContent(transcript, 'document');
     fs.writeFileSync(summaryPath, summary, 'utf8');
 
-    return { transcript, summary, subtitlePath: subtitlePath || null };
+    return { transcript, summary, subtitlePath };
   })();
 
   activeGenerations.set(filePath, promise);
@@ -2466,9 +2326,7 @@ async function buildSearchIndex() {
   if (pageTextChanged) {
     pageTextChanged = false;
     try {
-      fs.mkdirSync(CACHE_DIR, { recursive: true });
-      fs.writeFileSync(`${PAGE_TEXT_FILE}.tmp`, JSON.stringify(pageTextCache), 'utf8');
-      fs.renameSync(`${PAGE_TEXT_FILE}.tmp`, PAGE_TEXT_FILE);
+      writeFileAtomic(PAGE_TEXT_FILE, JSON.stringify(pageTextCache));
     } catch (err) {
       console.error('Error saving page text cache:', err);
     }
@@ -2580,7 +2438,9 @@ function retrieveCourseExcerpts(courseId, question, budget = 60000) {
   let used = 0;
   for (const chunk of picked) {
     const where = chunk.sectionName && chunk.sectionName !== 'General' ? ` (${chunk.sectionName})` : '';
-    let source = `${chunk.kind === 'page' ? 'Page' : 'Lesson'} "${chunk.itemName}"${where}`;
+    let source = chunk.kind === 'course-notes'
+      ? 'Course summary'
+      : `${chunk.kind === 'page' ? 'Page' : 'Lesson'} "${chunk.itemName}"${where}`;
     const start = startOfMatch(chunk, query);
     if (start !== null) {
       const link = `timestamp:${encodeURIComponent(getRelativePathFromAbsolute(chunk.filePath))}#${Math.floor(start)}`;
@@ -2816,6 +2676,8 @@ module.exports = {
   formatSegmentsAsVtt,
   ensureSearchIndex,
   retrieveCourseExcerpts,
+  getLessonText,
+  getRelativePathFromAbsolute,
   app,
   formatTimestamp
 };

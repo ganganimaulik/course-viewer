@@ -73,11 +73,11 @@ The Express app exposes the following APIs:
 ### Courses & Lessons
 - `GET /api/courses`: Scans configured folders and returns a list of parsed courses containing sections, items, and merged progress. Sorted by `lastStudied` (most recent first) then alphabetical.
 - `GET /api/progress`: Gets all progress entries.
-- `POST /api/progress` `{ filePath, currentTime, duration, completed, skipped, scroll, page, pages }`: Updates progress metrics for a file. `scroll` (0-1) is how far a lesson page or Word document is scrolled and `page`/`pages` the open page of a PDF; reaching 95% of a page, or the last page of a PDF, completes it. The frontend only saves scrolling the reader did (`trackPageScroll()`), since late-loading styles also move pages.
+- `POST /api/progress` `{ filePath, currentTime, duration, completed, skipped, scroll, page, pages }`: Updates progress metrics for a file. `scroll` (0-1) is how far a lesson page or Word document is scrolled and `page`/`pages` the open page of a PDF; reaching 95% of a page, or the last page of a PDF, completes it. The frontend only saves scrolling the reader did (`trackPageScroll()`), since late-loading styles also move pages, and sends `scroll: 1` (or the last page) once the reader interacts with a page or PDF that has nothing to scroll. Marking a page or PDF incomplete (`completed: false`) clears its reading position, so it starts over.
 - `POST /api/progress/reset`: Clears all progress.
 - `POST /api/courses/reset` `{ courseId }`: Resets progress for a specific course (id is base64url of its absolute path).
 - `POST /api/courses/complete` `{ courseId }`: Marks all lessons in a course as completed.
-- `GET /api/media/durations`: Video/audio lengths measured so far, and how many are still `pending`. Lengths are measured with ffprobe in the background (`measureDurations()`) and cached in `CACHE_DIR/durations.json`; `/api/courses` includes them as `duration` (`null` if ffprobe couldn't read the file, left out while pending).
+- `GET /api/media/durations?from=<n>`: Video/audio lengths measured since `from` (the previous reply's `next`; 0 for everything measured since the server started), `null` for files ffprobe couldn't read, and how many are still `pending`. Lengths are measured with ffprobe in the background (`measureDurations()`) and cached in `CACHE_DIR/durations.json`; `/api/courses` includes them as `duration` (`null` if it can't be measured, including when ffprobe isn't installed; left out while pending).
 
 ### Study Time
 - `POST /api/activity` `{ filePath, seconds }`: Adds real study time (at most 300 seconds per report) to today's total for the file's course, in `db.activity` (`{ 'YYYY-MM-DD': { coursePath: seconds } }`, local dates). The frontend reports while a video or audio lesson plays, or while a page/PDF/document is open with input in the last 5 minutes (`tickStudyTime()`). Progress resets leave this history alone.
@@ -98,7 +98,7 @@ File types come from `getFileType()` in `server.js`: `video`, `audio`, `pdf`, `h
 
 ### AI Features
 - `GET /api/video/metadata?path=<path>`: Gets transcript (from `<video>.transcript.txt`) and summary (from `<video>.summary.md`) if they exist.
-- `POST /api/video/generate-transcript` `{ path, retranscribe }`: Builds the transcript (existing file, subtitles, extracted document text, or Whisper transcription on Modal for video and audio) and summarizes it with Fireworks AI. A Whisper transcription also writes `<name>.vtt` captions; `retranscribe: true` ignores an existing transcript, for lectures transcribed before captions were saved. Returns `subtitlePath` for media.
+- `POST /api/video/generate-transcript` `{ path, retranscribe }`: Gets the lesson's text with `getLessonText()` (its saved `.transcript.txt`, the document's text, or for video and audio their subtitles, else a Whisper transcription on Modal) and summarizes it with Fireworks AI. The course summary job uses the same function, so both read files the same way; files with no text, or only a link, are skipped. A Whisper transcription also writes `<name>.vtt` captions; `retranscribe: true` ignores an existing transcript, for lectures transcribed before captions were saved. Returns `subtitlePath` for media.
 - `POST /api/video/pregenerate-summaries` `{ paths }`: Queues background summary generation for neighboring lessons.
 - `POST /api/video/chat` `{ path, message, history }`: Uses the Fireworks model to chat about a lesson's transcript.
 - `POST /api/course/chat` `{ courseId, message, history }`: Chatbot for the entire course. Its context is `course.summary.md` (if generated) plus up to 60k characters of the passages most relevant to the question and the two before it (`retrieveCourseExcerpts()`), each labelled with its lesson and, for lectures, a `timestamp:` link the model is told to cite.
@@ -130,7 +130,8 @@ File types come from `getFileType()` in `server.js`: `video`, `audio`, `pdf`, `h
 - Preserve any existing comments/logic in `server.js`.
 
 ### Frontend (`public/app.js`, `public/index.html`, `public/style.css`)
-- **Single Page App Architecture**: Do not introduce custom frontend routing libraries. Keep routing inside `switchView(viewId)` in `app.js`.
+- **Single Page App Architecture**: Do not introduce custom frontend routing libraries. Keep routing inside `switchView(viewId)` in `app.js`. The app must be opened from the server (`http://localhost:3005`), so API calls use relative `/api/...` URLs.
+- **Item objects**: `refreshCatalog()` keeps the open item's object, copying the refreshed fields into it, because the player and the page and PDF trackers hold references to it. Don't replace `state.currentItem` with a fresh object.
 - **Vanilla CSS**: Follow the modern glassmorphic styling conventions defined in `public/style.css`. Utilize CSS variables (e.g. `--bg-glass`, `--primary`, `--accent`) for theme consistency. Avoid Tailwind CSS unless specifically requested.
 - **No Placeholders**: Do not insert broken elements or dummy mock assets. Keep UI interactions complete.
 - **Untrusted Content**: Render Markdown (course files, AI notes, chat replies) only through `parseMarkdown()`, which sanitizes it with DOMPurify. Put other course text, such as file names, into the page with `textContent` or `escapeHtml()`, never raw `innerHTML`.

@@ -13,7 +13,7 @@ A local web application designed to help you organize, play, and track learning 
   - Text & Markdown viewer.
 - **Progress Tracking**:
   - Tracks specific video playback seconds (remembers where you left off).
-  - Remembers how far you've scrolled in lesson pages and Word documents, and which page of a PDF you're on, and marks them complete when you reach the end.
+  - Remembers how far you've scrolled in lesson pages and Word documents, and which page of a PDF you're on, and marks them complete when you reach the end (a page that fits on screen, once you scroll or click in it).
   - Highlights active courses on the Dashboard under **Continue Learning**.
   - Logs real study time per day: while a video or audio lesson plays, or while a page, PDF or document is open and you've been active in the last 5 minutes. The Dashboard shows today's time, your streak, progress toward a weekly goal (set in **Settings**) and a 26-week heatmap. History starts the first time you study with this version.
   - Measures every video and audio lesson's length with ffprobe in the background, so course cards show total length and time left at your playback speed (which is remembered).
@@ -58,6 +58,7 @@ A local web application designed to help you organize, play, and track learning 
    ```
 4. Open the application in your browser:
    [http://localhost:3005](http://localhost:3005)
+   (Opening `public/index.html` as a file won't work: the server only answers pages it serves itself.)
 
 The server only accepts requests from this Mac: it listens on `127.0.0.1`, rejects requests made by other websites, and only serves files inside your watched folders. Downloaded lesson pages and Markdown can't run scripts inside the app; embedded players such as Vimeo are unaffected.
 
