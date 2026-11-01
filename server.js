@@ -484,7 +484,7 @@ app.get('/api/progress', (req, res) => {
 
 // Save progress for an item
 app.post('/api/progress', (req, res) => {
-  const { filePath, currentTime, duration, completed, skipped } = req.body;
+  const { filePath, currentTime, duration, completed, skipped, scroll, page, pages } = req.body;
   if (!filePath) {
     return res.status(400).send({ error: 'filePath is required' });
   }
@@ -498,6 +498,16 @@ app.post('/api/progress', (req, res) => {
 
   if (currentTime !== undefined) prog.currentTime = currentTime;
   if (duration !== undefined) prog.duration = duration;
+
+  // Reading position: how far a page is scrolled (0-1), or which page of a PDF is open
+  const readingMoved = scroll !== undefined || (page !== undefined && pages);
+  if (scroll !== undefined) {
+    prog.scroll = Math.min(1, Math.max(0, Number(scroll) || 0));
+  }
+  if (page !== undefined && pages) {
+    prog.pages = Math.max(1, Math.round(Number(pages)) || 1);
+    prog.page = Math.min(prog.pages, Math.max(1, Math.round(Number(page)) || 1));
+  }
 
   if (skipped !== undefined) {
     prog.skipped = skipped;
@@ -533,6 +543,15 @@ app.post('/api/progress', (req, res) => {
   if (!prog.skipped && prog.duration && prog.currentTime !== undefined) {
     prog.percent = Math.min(100, Math.round((prog.currentTime / prog.duration) * 100));
     if (prog.percent >= 95) {
+      prog.completed = true;
+    }
+  }
+
+  // Reaching the bottom of a page, or the last page of a PDF, completes it
+  if (!prog.skipped && readingMoved) {
+    const fraction = prog.pages ? prog.page / prog.pages : (prog.scroll || 0);
+    prog.percent = Math.min(100, Math.round(fraction * 100));
+    if (prog.pages ? prog.page >= prog.pages : prog.scroll >= 0.95) {
       prog.completed = true;
     }
   }

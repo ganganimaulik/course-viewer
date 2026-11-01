@@ -181,6 +181,32 @@ describe('lesson types', () => {
   });
 });
 
+describe('reading progress', () => {
+  it('records how far a page is scrolled and completes it near the bottom', async () => {
+    let prog = await (await postJson('/api/progress', { filePath: pagePath, scroll: 0.5 })).json();
+    expect(prog).toMatchObject({ scroll: 0.5, percent: 50 });
+    expect(prog.completed).toBeFalsy();
+
+    prog = await (await postJson('/api/progress', { filePath: pagePath, scroll: 0.97 })).json();
+    expect(prog).toMatchObject({ percent: 97, completed: true });
+  });
+
+  it('records the open page of a PDF and completes it on the last page', async () => {
+    const pdfPath = path.join(courseDir, 'slides.pdf');
+    let prog = await (await postJson('/api/progress', { filePath: pdfPath, page: 3, pages: 10 })).json();
+    expect(prog).toMatchObject({ page: 3, pages: 10, percent: 30 });
+    expect(prog.completed).toBeFalsy();
+
+    prog = await (await postJson('/api/progress', { filePath: pdfPath, page: 10, pages: 10 })).json();
+    expect(prog).toMatchObject({ percent: 100, completed: true });
+  });
+
+  it('keeps reading positions in range', async () => {
+    const prog = await (await postJson('/api/progress', { filePath: path.join(courseDir, 'other.pdf'), page: 99, pages: 4 })).json();
+    expect(prog).toMatchObject({ page: 4, pages: 4 });
+  });
+});
+
 describe('access control', () => {
   it('sends no CORS headers, so other sites cannot read responses', async () => {
     const res = await fetch(`${baseUrl}/api/config`, { headers: { Origin: 'https://example.com' } });

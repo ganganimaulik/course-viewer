@@ -13,6 +13,8 @@
   <!-- KaTeX for rendering LaTeX math formulas -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <!-- PDF.js viewer styles (the library itself loads the first time a PDF is opened) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/web/pdf_viewer.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -380,9 +382,31 @@
                   </div>
                 </div>
 
-                <!-- PDF Viewer Container -->
-                <div class="viewer-iframe" id="viewer-pdf-container" style="display:none;">
-                  <iframe id="pdf-frame" src="" type="application/pdf"></iframe>
+                <!-- PDF Viewer Container (PDF.js, so the app knows which page is open) -->
+                <div class="viewer-pdf" id="viewer-pdf-container" style="display:none;">
+                  <div class="pdf-toolbar">
+                    <button class="control-btn" onclick="changePdfPage(-1)" title="Previous page">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                    </button>
+                    <span class="pdf-page-label" id="pdf-page-label">Loading...</span>
+                    <button class="control-btn" onclick="changePdfPage(1)" title="Next page">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
+                    <div class="pdf-toolbar-spacer"></div>
+                    <button class="control-btn" onclick="zoomPdf(-1)" title="Zoom out">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                    <button class="control-btn font-small" id="pdf-zoom-label" onclick="zoomPdf(0)" title="Fit to width">Fit</button>
+                    <button class="control-btn" onclick="zoomPdf(1)" title="Zoom in">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                  </div>
+                  <div class="pdf-stage">
+                    <!-- PDF.js requires an absolutely positioned scroll container -->
+                    <div class="pdf-scroll-container" id="pdf-scroll-container">
+                      <div id="pdf-viewer" class="pdfViewer"></div>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- HTML Viewer Container -->

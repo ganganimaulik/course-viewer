@@ -1628,6 +1628,55 @@ h1 {
   background: #fff;
 }
 
+/* PDF viewer (PDF.js) */
+.viewer-pdf {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #20223a;
+}
+
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(7, 8, 15, 0.6);
+  flex-shrink: 0;
+}
+
+.pdf-page-label {
+  min-width: 110px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.pdf-toolbar-spacer {
+  flex: 1;
+}
+
+.pdf-toolbar .control-btn.font-small {
+  width: auto;
+  min-width: 44px;
+  padding: 0 8px;
+}
+
+.pdf-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.pdf-scroll-container {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
 /* Markdown/Text Panel */
 .viewer-text {
   width: 100%;

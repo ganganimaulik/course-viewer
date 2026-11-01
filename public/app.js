@@ -62,6 +62,7 @@ function displayPath(fullPath) {
 // --- INIT APP ---
 document.addEventListener('DOMContentLoaded', () => {
   initVideoPlayerEvents();
+  initReadingProgress();
   refreshCatalog(true);
   
   // Restore sidebar state
@@ -169,6 +170,7 @@ function switchView(viewId) {
       video.pause();
     }
     cancelAutoplay();
+    flushReadingPosition();
   }
 
   // Update Nav Active States
@@ -356,8 +358,14 @@ function renderDashboard() {
         progressLabel = 'Skipped';
       } else if (isMediaItem(item)) {
         progressLabel = `${formatTime(item.progress.currentTime)} / ${formatTime(item.progress.duration)} (${percent}%)`;
+      } else if (item.progress.completed) {
+        progressLabel = 'Completed';
+      } else if (item.progress.pages) {
+        progressLabel = `Page ${item.progress.page} of ${item.progress.pages}`;
+      } else if (item.progress.scroll !== undefined) {
+        progressLabel = `${percent}% read`;
       } else {
-        progressLabel = item.progress.completed ? 'Completed' : 'Started';
+        progressLabel = 'Started';
       }
 
       const dateStudied = getRelativeTime(new Date(item.progress.lastStudied));
@@ -998,6 +1006,8 @@ function updateHeaderActionBtn() {
 
 // Select item to load in viewer panel
 function selectItem(item, section = null) {
+  flushReadingPosition(); // Save where the previous page or PDF was left
+
   // Clear any active playback timer loops
   if (state.progressSaveInterval) {
     clearInterval(state.progressSaveInterval);
@@ -1046,16 +1056,17 @@ function selectItem(item, section = null) {
   if (isMediaItem(item)) {
     loadVideoPlayer(item);
   } else if (item.type === 'pdf') {
-    const iframe = document.getElementById('pdf-frame');
-    iframe.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
+    loadPdfViewer(item);
     saveItemStarted(item);
   } else if (item.type === 'html') {
     const iframe = document.getElementById('html-frame');
     iframe.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
+    watchLessonFrame(item);
     saveItemStarted(item);
   } else if (item.type === 'docx') {
     const iframe = document.getElementById('html-frame');
     iframe.src = `${API_BASE}/api/docx?path=${encodeURIComponent(item.path)}`;
+    watchLessonFrame(item);
     saveItemStarted(item);
   } else if (item.type === 'text') {
     loadTextViewer(item);
@@ -1686,6 +1697,244 @@ async function saveItemStarted(item) {
   } catch (e) {
     console.error(e);
   }
+}
+
+// --- READING PROGRESS (pages, Word documents and PDFs) ---
+// Pages remember how far they're scrolled and PDFs which page is open; reaching the end completes the lesson.
+
+// Save the latest position once the reader pauses, or right away when they move on
+function queueReadingPosition(item, position) {
+  state.pendingReadingPosition = { item, position };
+  clearTimeout(state.readingSaveTimer);
+  state.readingSaveTimer = setTimeout(flushReadingPosition, 1200);
+}
+
+async function flushReadingPosition() {
+  clearTimeout(state.readingSaveTimer);
+  const pending = state.pendingReadingPosition;
+  if (!pending) return;
+  state.pendingReadingPosition = null;
+  try {
+    const res = await fetch(`${API_BASE}/api/progress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: pending.item.path, ...pending.position }),
+      keepalive: true // Still sent if this runs as the tab closes
+    });
+    const progressObj = await res.json();
+    syncCourseProgressMap(pending.item.path, progressObj);
+    pending.item.progress = progressObj;
+    if (state.currentItem === pending.item) updateHeaderActionBtn();
+  } catch (err) {
+    console.error('Error saving reading position:', err);
+  }
+}
+
+// The element that scrolls a page: usually the page itself, but saved web apps sometimes scroll an inner panel
+function findScrollContainer(doc) {
+  const root = doc.scrollingElement || doc.documentElement;
+  if (root.scrollHeight - root.clientHeight > 40) return root;
+  let best = null;
+  let bestRange = 40;
+  for (const el of doc.body.querySelectorAll('*')) {
+    const range = el.scrollHeight - el.clientHeight;
+    if (range > bestRange && /(auto|scroll)/.test(doc.defaultView.getComputedStyle(el).overflowY)) {
+      best = el;
+      bestRange = range;
+    }
+  }
+  return best;
+}
+
+const trackedPages = new WeakSet();
+
+// Lesson pages and Word documents load in the same-origin frame, so the app can follow their scrolling
+// (their own scripts are blocked, see LESSON_PAGE_POLICY in server.js)
+function trackPageScroll(item, doc) {
+  trackedPages.add(doc);
+
+  // Only scrolling the reader does counts: late styles and images also move the page, and could otherwise
+  // make it look finished
+  let interacted = false;
+  ['wheel', 'keydown', 'touchstart', 'mousedown'].forEach((type) => {
+    doc.addEventListener(type, () => { interacted = true; }, { passive: true, capture: true });
+  });
+
+  // Reopen where the reader left off, unless the lesson is done. Done again once the page has fully loaded,
+  // since late styles and images move things around, unless the reader has started scrolling by then.
+  const restore = () => {
+    const saved = item.progress && item.progress.scroll;
+    if (!saved || item.progress.completed || interacted) return;
+    const container = findScrollContainer(doc);
+    if (container) container.scrollTop = saved * (container.scrollHeight - container.clientHeight);
+  };
+  restore();
+  doc.defaultView.addEventListener('load', restore, { once: true });
+
+  // Scroll events don't bubble, so listen while they're captured, then keep only the page's main scroller's
+  let container = null;
+  doc.addEventListener('scroll', (event) => {
+    if (state.currentItem !== item || !interacted) return;
+    container = container || findScrollContainer(doc);
+    const source = event.target === doc ? doc.scrollingElement : event.target;
+    if (!container || source !== container) return;
+    const range = container.scrollHeight - container.clientHeight;
+    queueReadingPosition(item, { scroll: range > 0 ? Math.min(1, container.scrollTop / range) : 1 });
+  }, { passive: true, capture: true });
+}
+
+// Start tracking a page as soon as its DOM is ready: saved course pages can take a long time to fire "load",
+// since that waits for their embedded players and remote images
+function watchLessonFrame(item) {
+  const frame = document.getElementById('html-frame');
+  const src = frame.src;
+  const startedAt = Date.now();
+  clearInterval(state.lessonFrameTimer);
+  state.lessonFrameTimer = setInterval(() => {
+    if (state.currentItem !== item || Date.now() - startedAt > 30000) {
+      clearInterval(state.lessonFrameTimer);
+      return;
+    }
+    // Until the new page commits, the frame still holds the previous one (already tracked, if it's this lesson)
+    const doc = frame.contentDocument; // null once a link has taken the frame to another site
+    if (doc && doc.body && doc.readyState !== 'loading' && doc.location.href === src && !trackedPages.has(doc)) {
+      clearInterval(state.lessonFrameTimer);
+      trackPageScroll(item, doc);
+    }
+  }, 150);
+}
+
+function initReadingProgress() {
+  window.addEventListener('pagehide', flushReadingPosition);
+}
+
+// PDF.js renders PDFs in the page (instead of the browser's viewer, which can't say what page is open).
+// It loads from the CDN the first time a PDF is opened.
+const PDFJS_BASE = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299';
+const pdfState = { viewer: null, item: null, loadingTask: null, ready: false, fitWidth: true };
+let pdfViewerReady = null;
+
+function getPdfViewer() {
+  if (!pdfViewerReady) {
+    pdfViewerReady = (async () => {
+      const pdfjsLib = await import(`${PDFJS_BASE}/build/pdf.min.mjs`);
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/build/pdf.worker.min.mjs`;
+      globalThis.pdfjsLib = pdfjsLib; // pdf_viewer.mjs looks for the library here
+      const viewerLib = await import(`${PDFJS_BASE}/web/pdf_viewer.mjs`);
+
+      const container = document.getElementById('pdf-scroll-container');
+      const eventBus = new viewerLib.EventBus();
+      // Links in a PDF open in a new tab rather than navigating away from the app
+      const linkService = new viewerLib.PDFLinkService({ eventBus, externalLinkTarget: viewerLib.LinkTarget.BLANK });
+      const viewer = new viewerLib.PDFViewer({ container, viewer: document.getElementById('pdf-viewer'), eventBus, linkService });
+      linkService.setViewer(viewer);
+      pdfState.viewer = viewer;
+
+      eventBus.on('pagesinit', () => {
+        viewer.currentScaleValue = 'page-width';
+        pdfState.fitWidth = true;
+        const item = pdfState.item;
+        const savedPage = item && item.progress && !item.progress.completed ? item.progress.page : null;
+        if (savedPage && savedPage <= viewer.pagesCount) viewer.currentPageNumber = savedPage;
+        updatePdfLabels();
+        pdfState.ready = true;
+      });
+      eventBus.on('pagechanging', () => {
+        updatePdfLabels();
+        if (pdfState.ready) savePdfPage(viewer.currentPageNumber);
+      });
+      eventBus.on('scalechanging', updatePdfLabels);
+      // A last page taller than the screen only counts once scrolled to its bottom
+      container.addEventListener('scroll', () => {
+        if (pdfState.ready && container.scrollTop + container.clientHeight >= container.scrollHeight - 2) {
+          savePdfPage(viewer.pagesCount);
+        }
+      }, { passive: true });
+      new ResizeObserver(() => {
+        // Zero width while another viewer is showing
+        if (pdfState.fitWidth && viewer.pagesCount && container.clientWidth > 0) viewer.currentScaleValue = 'page-width';
+      }).observe(container);
+
+      return { pdfjsLib, viewer, linkService, worker: new pdfjsLib.PDFWorker() };
+    })();
+    pdfViewerReady.catch(() => { pdfViewerReady = null; }); // Let the next PDF retry, e.g. after being offline
+  }
+  return pdfViewerReady;
+}
+
+async function loadPdfViewer(item) {
+  const label = document.getElementById('pdf-page-label');
+  label.textContent = 'Loading...';
+  pdfState.item = item;
+  pdfState.ready = false;
+
+  let pdf;
+  try {
+    pdf = await getPdfViewer();
+  } catch (err) {
+    console.error('Error loading PDF.js:', err);
+    if (pdfState.item === item) label.textContent = "Couldn't load the PDF viewer";
+    return;
+  }
+  if (pdfState.item !== item) return; // Moved on while the viewer loaded
+
+  if (pdfState.loadingTask) pdfState.loadingTask.destroy();
+  const loadingTask = pdf.pdfjsLib.getDocument({
+    url: `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`,
+    worker: pdf.worker,
+    isEvalSupported: false,
+    cMapUrl: `${PDFJS_BASE}/cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/`,
+    wasmUrl: `${PDFJS_BASE}/wasm/`,
+    iccUrl: `${PDFJS_BASE}/iccs/`
+  });
+  pdfState.loadingTask = loadingTask;
+  try {
+    const pdfDocument = await loadingTask.promise;
+    if (pdfState.item !== item) return;
+    pdf.viewer.setDocument(pdfDocument);
+    pdf.linkService.setDocument(pdfDocument, null);
+  } catch (err) {
+    if (pdfState.item !== item || err.name === 'AbortException') return;
+    console.error('Error opening PDF:', err);
+    label.textContent = "Couldn't open this PDF";
+  }
+}
+
+function savePdfPage(page) {
+  const item = pdfState.item;
+  const pages = pdfState.viewer.pagesCount;
+  if (!item || state.currentItem !== item || !pages) return;
+  const saved = item.progress || {};
+  if (saved.page === page && saved.pages === pages) return;
+  queueReadingPosition(item, { page, pages });
+}
+
+function updatePdfLabels() {
+  const viewer = pdfState.viewer;
+  if (!viewer || !viewer.pagesCount) return;
+  document.getElementById('pdf-page-label').textContent = `Page ${viewer.currentPageNumber} of ${viewer.pagesCount}`;
+  document.getElementById('pdf-zoom-label').textContent = pdfState.fitWidth ? 'Fit' : `${Math.round(viewer.currentScale * 100)}%`;
+}
+
+function changePdfPage(delta) {
+  const viewer = pdfState.viewer;
+  if (!viewer || !viewer.pagesCount) return;
+  viewer.currentPageNumber = Math.min(viewer.pagesCount, Math.max(1, viewer.currentPageNumber + delta));
+}
+
+// -1/+1 zoom out/in; 0 fits the page width again
+function zoomPdf(direction) {
+  const viewer = pdfState.viewer;
+  if (!viewer || !viewer.pagesCount) return;
+  pdfState.fitWidth = direction === 0;
+  if (direction === 0) {
+    viewer.currentScaleValue = 'page-width';
+  } else {
+    viewer.currentScale = Math.min(4, Math.max(0.25, viewer.currentScale * (direction > 0 ? 1.15 : 1 / 1.15)));
+  }
+  updatePdfLabels();
 }
 
 // Toggle Complete via check box

@@ -7,12 +7,13 @@ A local web application designed to help you organize, play, and track learning 
 - **Support for Multiple Media Formats**:
   - Custom HTML5 Video player with subtitle overlay support (translates `.srt` on the fly). Audio lessons (`.mp3`, `.m4a`, `.ogg`, etc.) play in the same player.
   - `.ts` videos (MPEG transport streams, e.g. HLS downloads) are copied into an MP4 with ffmpeg the first time they play. The copies live in `~/Library/Caches/course-viewer` and the least recently watched are deleted past 4 GB.
-  - Inline PDF Document Viewer.
+  - PDF viewer ([PDF.js](https://mozilla.github.io/pdf.js/), loaded on first use) with page navigation and zoom. For search or printing, use **Open in App**.
   - Word documents (`.docx`) shown as readable pages.
   - Interactive HTML Article iframe container.
   - Text & Markdown viewer.
 - **Progress Tracking**:
   - Tracks specific video playback seconds (remembers where you left off).
+  - Remembers how far you've scrolled in lesson pages and Word documents, and which page of a PDF you're on, and marks them complete when you reach the end.
   - Highlights active courses on the Dashboard under **Continue Learning**.
   - Provides a global reset and per-course reset functionality (clears bookmarks, read counts, and checklist states).
 - **AI Notes & Chat**:

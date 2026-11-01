@@ -34,6 +34,17 @@ The application saves config and progress state in a local JSON database: [db.js
       "percent": 100,
       "currentTime": 124.5,
       "duration": 124.5
+    },
+    "/absolute/path/to/courses/folder-1/Course_Name/Reading.html": {
+      "lastStudied": "2026-06-08T03:10:00.000Z",
+      "percent": 40,
+      "scroll": 0.4
+    },
+    "/absolute/path/to/courses/folder-1/Course_Name/Slides.pdf": {
+      "lastStudied": "2026-06-08T03:20:00.000Z",
+      "percent": 25,
+      "page": 5,
+      "pages": 20
     }
   },
   "aiConfig": {
@@ -58,7 +69,7 @@ The Express app exposes the following APIs:
 ### Courses & Lessons
 - `GET /api/courses`: Scans configured folders and returns a list of parsed courses containing sections, items, and merged progress. Sorted by `lastStudied` (most recent first) then alphabetical.
 - `GET /api/progress`: Gets all progress entries.
-- `POST /api/progress` `{ filePath, currentTime, duration, completed, skipped }`: Updates progress metrics for a file.
+- `POST /api/progress` `{ filePath, currentTime, duration, completed, skipped, scroll, page, pages }`: Updates progress metrics for a file. `scroll` (0-1) is how far a lesson page or Word document is scrolled and `page`/`pages` the open page of a PDF; reaching 95% of a page, or the last page of a PDF, completes it. The frontend only saves scrolling the reader did (`trackPageScroll()`), since late-loading styles also move pages.
 - `POST /api/progress/reset`: Clears all progress.
 - `POST /api/courses/reset` `{ courseId }`: Resets progress for a specific course (id is base64url of its absolute path).
 - `POST /api/courses/complete` `{ courseId }`: Marks all lessons in a course as completed.
