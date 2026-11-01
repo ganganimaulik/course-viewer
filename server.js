@@ -84,6 +84,14 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Each page of the app has its own address (see "PAGE URLS" in public/app.js), which loads the app to show it.
+// Not inside a frame: a lesson page linking to, say, /courses/... would otherwise get a second copy of the app.
+app.get(['/dashboard', '/courses', '/courses/*', '/search', '/settings'], (req, res, next) => {
+  const dest = req.get('Sec-Fetch-Dest');
+  if (dest && dest !== 'document') return next();
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // Initialize Database
 let db = {
   folders: [

@@ -23,6 +23,7 @@ A local web application designed to help you organize, play, and track learning 
   - Shows transcripts with clickable timestamps that follow along as the lecture plays. Lectures transcribed before captions were saved can be transcribed again from the Transcript tab.
   - Generates lesson notes, course-wide study guides, and answers questions with [Fireworks AI](https://fireworks.ai) models. Course chat answers from the passages most relevant to your question and cites lecture timestamps you can click.
 - **Search**: One search box (press **/** anywhere) across lesson names, transcripts, AI notes and the text of lesson pages in every course. Results open the lesson, and lectures start where the match is spoken. Text from lesson pages is cached in `~/Library/Caches/course-viewer`.
+- **A Link for Every Page**: Each course, lesson, course summary, search and settings page has its own address (e.g. `/courses/<course>/<section>/<lesson>.mp4`), so reloading, Back/Forward, bookmarks and opening lessons in a new tab all work. Add `?t=<seconds>` to a lecture's address to start it at that moment. Opening [http://localhost:3005](http://localhost:3005) reopens the page you were on last.
 - **Desktop System Integrations**:
   - **Reveal in Finder**: Instantly highlights the current lesson file in your Mac Finder.
   - **Open in Default App**: Launches the selected file in your system's default viewer (e.g., VLC for unsupported codecs, Acrobat Reader, Chrome, etc.).

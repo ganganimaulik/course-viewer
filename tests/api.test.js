@@ -423,6 +423,29 @@ describe('access control', () => {
   });
 });
 
+describe('page addresses', () => {
+  it('loads the app at each page\'s address, so reloading and links opened in new tabs work', async () => {
+    for (const page of ['/dashboard', '/courses', '/courses/course-a', '/courses/course-a/lesson.mp4?t=30',
+      '/courses/course-a/summary', '/search?q=brain&kind=transcript', '/settings']) {
+      const res = await fetch(`${baseUrl}${page}`, { headers: { 'Sec-Fetch-Dest': 'document' } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+      expect(await res.text()).toContain('<script src="/app.js"></script>');
+    }
+  });
+
+  it('does not load the app inside a lesson page that links to one of its addresses', async () => {
+    const res = await fetch(`${baseUrl}/courses/course-a`, { headers: { 'Sec-Fetch-Dest': 'iframe' } });
+    expect(res.status).toBe(404);
+  });
+
+  it('leaves other addresses alone', async () => {
+    expect((await fetch(`${baseUrl}/api/no-such-endpoint`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/no-such-page`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/style.css`)).headers.get('content-type')).toMatch(/^text\/css/);
+  });
+});
+
 describe('course reset', () => {
   it('resetting the loose-files course keeps progress for the courses in its subfolders', async () => {
     for (const filePath of [videoPath, looseVideoPath]) {

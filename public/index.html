@@ -15,7 +15,8 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
   <!-- PDF.js viewer styles (the library itself loads the first time a PDF is opened) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/web/pdf_viewer.css">
-  <link rel="stylesheet" href="style.css">
+  <!-- Root-relative, since pages have nested addresses (e.g. /courses/<course>/<lesson>) -->
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="app-container">
@@ -46,22 +47,23 @@
       </div>
 
       <nav class="nav-menu">
-        <button class="nav-btn active" id="nav-dashboard" onclick="switchView('dashboard')">
+        <!-- Links to each page's address; app.js opens them in place (see routeTo) -->
+        <a class="nav-btn active" id="nav-dashboard" href="/dashboard">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
           <span class="nav-text">Dashboard</span>
-        </button>
-        <button class="nav-btn" id="nav-courses" onclick="switchView('courses')">
+        </a>
+        <a class="nav-btn" id="nav-courses" href="/courses">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5L4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/></svg>
           <span class="nav-text">Course Catalog</span>
-        </button>
-        <button class="nav-btn" id="nav-search" onclick="switchView('search')" title="Search all courses (/)">
+        </a>
+        <a class="nav-btn" id="nav-search" href="/search" title="Search all courses (/)">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <span class="nav-text">Search</span>
-        </button>
-        <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
+        </a>
+        <a class="nav-btn" id="nav-settings" href="/settings">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="nav-text">Settings</span>
-        </button>
+        </a>
         
         <!-- Toggle Sidebar Button -->
         <button class="nav-btn toggle-sidebar-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse Sidebar" style="margin-top: auto;">
@@ -771,6 +773,6 @@
   <!-- Prism.js core and autoloader plugin for syntax highlighting -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
-  <script src="app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -195,6 +195,7 @@ body {
   font-weight: 500;
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
   transition: padding 0.3s cubic-bezier(0.4, 0, 0.2, 1), gap 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s, color 0.25s, transform 0.25s;
 }
 
@@ -503,6 +504,7 @@ h1 {
   font-family: var(--font-family-body);
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
   transition: border-color 0.2s, background 0.2s;
 }
 
@@ -749,6 +751,8 @@ h1 {
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
+  color: inherit;
+  text-decoration: none;
 }
 
 .resume-card:hover {
@@ -1029,6 +1033,14 @@ h1 {
   -webkit-box-orient: vertical;
   overflow: hidden;
   min-height: 46px;
+  text-decoration: none;
+}
+
+/* The title links to the course; its link covers the whole card, under the card's buttons */
+.course-title::after {
+  content: '';
+  position: absolute;
+  inset: 0;
 }
 
 .course-meta {
@@ -1230,6 +1242,8 @@ h1 {
   cursor: pointer;
   transition: background 0.2s;
   border-left: 3px solid transparent;
+  color: inherit;
+  text-decoration: none;
 }
 
 .outline-item:hover {
@@ -2241,6 +2255,8 @@ h1 {
   display: flex;
   gap: 6px;
   align-items: center;
+  position: relative;
+  z-index: 1; /* Above the course link that covers the card */
 }
 
 .card-reset-btn {

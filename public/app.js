@@ -61,7 +61,8 @@ function displayPath(fullPath) {
 document.addEventListener('DOMContentLoaded', () => {
   initVideoPlayerEvents();
   initReadingProgress();
-  refreshCatalog(true);
+  initRouting(); // Shows the page for the address; course pages wait for the catalog
+  refreshCatalog();
   
   // Restore sidebar state
   if (localStorage.getItem('sidebar-collapsed') === 'true') {
@@ -162,8 +163,7 @@ function handleTimestampClick(href) {
 function switchView(viewId) {
   tickStudyTime(); // Leaving the workspace stops the study timer
   state.view = viewId;
-  localStorage.setItem('current-view', viewId);
-  
+
   // Pause video player if we leave workspace
   if (viewId !== 'workspace') {
     const video = document.getElementById('main-video-player');
@@ -199,31 +199,256 @@ function switchView(viewId) {
     input.focus();
     input.select();
   }
+  updateUrl();
 }
 
-function restoreLastView() {
-  const savedView = localStorage.getItem('current-view');
-  if (!savedView) return;
+// --- PAGE URLS ---
+// Every page has its own address, so reloading, Back/Forward, bookmarks and opening links in new tabs all work:
+//   /dashboard, /courses, /settings, /search?q=<words>&kind=<kind>
+//   /courses/<course>                          a course with nothing open
+//   /courses/<course>/<folder>/<lesson.ext>    a lesson or resource, by its path in the course folder
+//                                              (lectures also take ?t=<seconds> to start from)
+//   /courses/<course>/summary                  the course summary
+// Names become slugs ("01 - What's Next.mp4" is "01-whats-next.mp4"), and "/" reopens the page open last time.
+// The address is worked out from what's on screen (currentPage()), so the functions that change pages only
+// call updateUrl(); routeTo() goes the other way, from an address to its page.
+const PAGE_VIEWS = ['dashboard', 'courses', 'search', 'settings'];
 
-  if (savedView === 'workspace') {
-    const savedCourseId = localStorage.getItem('current-course-id');
-    if (savedCourseId) {
-      const course = state.courses.find(c => c.id === savedCourseId);
-      if (course) {
-        const savedItemPath = localStorage.getItem('current-item-path');
-        openCourse(savedCourseId, savedItemPath);
-        return;
+// Lowercase words joined by hyphens: "Café – What's New?" is "cafe-whats-new". Letters of other scripts stay;
+// emoji and other symbols go.
+function slugify(text) {
+  return text.normalize('NFKD')
+    .replace(/[\u0300-\u036F]|['\u2019]/g, '') // Accents ("é" to "e") and apostrophes ("what's" to "whats")
+    .replace(/[\uFE00-\uFE0F]|\p{Me}|(?<![\p{L}\p{N}\p{M}])\p{M}+/gu, '') // Emoji variation selectors, keycaps, marks on no letter
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
+    .replace(/^-|-$/g, '');
+}
+
+// The first free one of slug, slug-2, slug-3... (an extension goes after the number: "intro-2.mp4")
+function uniqueSlug(base, ext, used) {
+  let slug = base + ext;
+  for (let n = 2; used.has(slug); n++) slug = `${base}-${n}${ext}`;
+  used.add(slug);
+  return slug;
+}
+
+// Name each course, and each file by its path in the course folder. Courses take theirs in path order, so a
+// course keeps its slug however the catalog is sorted; files go in the folder order the server sorts them in.
+function assignSlugs(courses) {
+  const courseSlugs = new Set();
+  [...courses].sort((a, b) => (a.path < b.path ? -1 : 1)).forEach((course) => {
+    course.slug = uniqueSlug(slugify(course.title) || 'course', '', courseSlugs);
+    const used = new Set(['summary']); // The course summary's address
+    course.sections.forEach(section => section.items.forEach((item) => {
+      const folders = item.relativePath.split('/');
+      const name = folders.pop();
+      const dot = name.lastIndexOf('.');
+      const ext = dot > 0 ? slugify(name.slice(dot + 1)) : '';
+      const base = folders.map(folder => `${slugify(folder) || 'untitled'}/`).join('') +
+        (slugify(dot > 0 ? name.slice(0, dot) : name) || 'untitled');
+      item.slug = uniqueSlug(base, ext && `.${ext}`, used);
+    }));
+  });
+}
+
+function courseUrl(course) {
+  return `/courses/${encodeURIComponent(course.slug)}`;
+}
+
+function itemUrl(course, item) {
+  return `${courseUrl(course)}/${item.slug.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+// The sidebar tab that lists an item
+function itemTab(item) {
+  return LESSON_TYPES.includes(item.type) ? 'lessons' : 'resources';
+}
+
+// The address and title of what's on screen (no address while a course page waits for the catalog)
+function currentPage() {
+  const course = state.currentCourse;
+  if (state.view === 'workspace') {
+    if (!course) return { url: null };
+    if (state.currentWorkspaceTab === 'course-summary') {
+      return { url: `${courseUrl(course)}/summary`, title: `Course Summary – ${course.title}` };
+    }
+    if (state.currentItem) {
+      return { url: itemUrl(course, state.currentItem), title: `${state.currentItem.name} – ${course.title}` };
+    }
+    return { url: courseUrl(course), title: course.title };
+  }
+  if (state.view === 'search') {
+    const query = document.getElementById('global-search-input').value.trim();
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    const kind = document.getElementById('global-search-kind').value;
+    if (kind) params.set('kind', kind);
+    return { url: params.toString() ? `/search?${params}` : '/search', title: query ? `Search: ${query}` : 'Search' };
+  }
+  const titles = { dashboard: 'Dashboard', courses: 'Course Catalog', settings: 'Settings' };
+  return { url: `/${state.view}`, title: titles[state.view] };
+}
+
+// Show the page on screen in the address bar, once the steps that changed it are done: opening a course and then
+// a lesson in it is one click, so one history entry. Back/Forward and corrected addresses replace the entry instead.
+let pendingUrlUpdate = null;
+function updateUrl(replace = false) {
+  if (pendingUrlUpdate) {
+    pendingUrlUpdate.replace = pendingUrlUpdate.replace || replace;
+    return;
+  }
+  pendingUrlUpdate = { replace };
+  queueMicrotask(() => {
+    const { replace } = pendingUrlUpdate;
+    pendingUrlUpdate = null;
+    const { url, title } = currentPage();
+    if (!url) return;
+    if (url !== location.pathname + location.search) {
+      // The title changes after the entry does: browsers label the entry with the title it has when it's left
+      history[replace ? 'replaceState' : 'pushState'](null, '', url);
+    }
+    document.title = `${title} – Antigravity`;
+    localStorage.setItem('last-url', url);
+    // The Search link returns to the last search
+    if (state.view === 'search') document.getElementById('nav-search').href = url;
+  });
+}
+
+// What an address points at: a main page (with the search, for /search), or a course and the rest of the path
+// for course pages. Null for addresses that aren't pages of the app.
+function parseRoute(url) {
+  const { pathname, searchParams } = new URL(url, location.origin);
+  const parts = pathname.split('/').filter(Boolean).map((part) => {
+    try {
+      return decodeURIComponent(part).normalize('NFC').toLowerCase();
+    } catch (err) {
+      return part; // Not valid percent-encoding, so it can't match a slug
+    }
+  });
+  if (parts.length === 0) return { view: 'resume' };
+  if (parts.length === 1 && PAGE_VIEWS.includes(parts[0])) {
+    return { view: parts[0], query: searchParams.get('q') || '', kind: searchParams.get('kind') || '' };
+  }
+  if (parts.length > 1 && parts[0] === 'courses') {
+    return { view: 'workspace', course: parts[1], path: parts.slice(2).join('/'), time: parseFloat(searchParams.get('t')) };
+  }
+  return null;
+}
+
+// Show the page for an address: on load, on Back/Forward, and for app links. replace keeps the history entry.
+function routeTo(url, { replace = false } = {}) {
+  const route = parseRoute(url);
+  state.awaitingCatalog = false;
+  if (replace) updateUrl(true);
+
+  if (route && route.view === 'resume') {
+    const last = localStorage.getItem('last-url');
+    const lastRoute = last && last.startsWith('/') ? parseRoute(last) : null;
+    if (lastRoute && lastRoute.view !== 'resume') {
+      history.replaceState(null, '', last);
+      routeTo(last, { replace: true });
+    } else {
+      switchView('dashboard');
+    }
+    return;
+  }
+  if (!route) {
+    switchView('dashboard');
+    updateUrl(true);
+    return;
+  }
+
+  if (route.view === 'search') {
+    const input = document.getElementById('global-search-input');
+    const kindSelect = document.getElementById('global-search-kind');
+    const shown = state.searchShown;
+    input.value = route.query;
+    kindSelect.value = route.kind;
+    if (kindSelect.selectedIndex === -1) kindSelect.value = '';
+    switchView('search');
+    // Results link to lessons by their slugs, which need the catalog. Back to a search keeps its results.
+    if (!state.coursesLoaded) {
+      state.awaitingCatalog = true;
+    } else if (!shown || shown.query !== input.value.trim() || shown.kind !== kindSelect.value) {
+      runGlobalSearch();
+    }
+    return;
+  }
+  if (route.view !== 'workspace') {
+    switchView(route.view);
+    return;
+  }
+
+  if (!state.coursesLoaded) {
+    switchView('workspace'); // "Loading Course..." until refreshCatalog() routes here again
+    state.awaitingCatalog = true;
+    return;
+  }
+  const course = state.courses.find(c => c.slug === route.course);
+  if (!course) {
+    showToast("That course isn't in your watched folders");
+    switchView('courses');
+    updateUrl(true);
+    return;
+  }
+  let item = null;
+  let section = null;
+  if (route.path && route.path !== 'summary') {
+    for (const sec of course.sections) {
+      item = sec.items.find(i => i.slug === route.path);
+      if (item) {
+        section = sec;
+        break;
       }
     }
+    if (!item) {
+      showToast("That lesson isn't in the course folder");
+      updateUrl(true); // The course's own page replaces the address
+    }
   }
+  const tab = route.path === 'summary' ? 'course-summary' : (item ? itemTab(item) : 'lessons');
+  const startAt = item && isMediaItem(item) && Number.isFinite(route.time) && route.time >= 0 ? route.time : null;
 
-  if (['dashboard', 'courses', 'search', 'settings'].includes(savedView)) {
-    switchView(savedView);
+  if (state.view !== 'workspace' || !state.currentCourse || state.currentCourse.id !== course.id) {
+    if (startAt !== null) state.pendingSeekTime = startAt;
+    openCourse(course.id, item ? item.path : null, tab);
+  } else if (tab === 'course-summary') {
+    if (state.currentWorkspaceTab !== tab) switchWorkspaceTab(tab);
+  } else if (!item) {
+    openCourse(course.id, null, tab); // Closes the open lesson
+  } else if (state.currentItem && state.currentItem.path === item.path) {
+    // Already open, e.g. Back from the course summary: show it again without reloading it
+    if (state.currentWorkspaceTab !== tab) switchWorkspaceTab(tab);
+    if (startAt !== null) seekCurrentMedia(startAt);
+  } else {
+    // Another lesson of the open course: the outline keeps its filter (switching tabs would clear it)
+    if (state.currentWorkspaceTab !== tab) switchWorkspaceTab(tab);
+    if (startAt !== null) state.pendingSeekTime = startAt;
+    selectItem(item, section);
   }
+}
+
+// App links open their page here; Cmd/Ctrl/Shift-click and the middle button still open a new tab or window
+function handleAppLinkClick(event) {
+  const link = event.target.closest('a[href]');
+  if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (link.target || link.hasAttribute('download') || link.origin !== location.origin || !parseRoute(link.href)) return;
+  // A link to a heading on this page (e.g. in a Markdown lesson) just scrolls there
+  if (link.hash && link.pathname === location.pathname && link.search === location.search) return;
+  event.preventDefault();
+  routeTo(link.href);
+}
+
+function initRouting() {
+  window.addEventListener('popstate', () => routeTo(location.href, { replace: true }));
+  document.addEventListener('click', handleAppLinkClick);
+  routeTo(location.href, { replace: true });
 }
 
 // --- FETCH & DATA SYNC ---
-async function refreshCatalog(isInitialLoad = false) {
+async function refreshCatalog() {
   const refreshBtn = document.getElementById('refresh-courses-btn');
   if (refreshBtn) {
     refreshBtn.disabled = true;
@@ -254,6 +479,8 @@ async function refreshCatalog(isInitialLoad = false) {
     // Fetch courses with merged progress
     const coursesRes = await fetch(`/api/courses`);
     state.courses = await coursesRes.json();
+    assignSlugs(state.courses);
+    state.coursesLoaded = true;
 
     renderDashboard();
     renderFullCatalog();
@@ -290,8 +517,11 @@ async function refreshCatalog(isInitialLoad = false) {
       }
     }
 
-    if (isInitialLoad) {
-      restoreLastView();
+    // Show the page that was waiting for the catalog, or keep the open course's address in step with its slugs
+    if (state.awaitingCatalog) {
+      routeTo(location.href, { replace: true });
+    } else if (state.view === 'workspace') {
+      updateUrl(true);
     }
   } catch (err) {
     console.error('Error fetching data:', err);
@@ -311,6 +541,8 @@ async function refreshCatalog(isInitialLoad = false) {
 
 // Calculate & display stats + resume grid + courses list on Dashboard
 function renderDashboard() {
+  if (!state.coursesLoaded) return; // Rendered once the catalog has loaded, rather than as empty
+
   // 1. Statistics
   let activeCount = 0;
   let completedCount = 0;
@@ -331,7 +563,8 @@ function renderDashboard() {
           recentFiles.push({
             ...item,
             courseTitle: course.title,
-            courseId: course.id
+            courseId: course.id,
+            url: itemUrl(course, item)
           });
         }
       });
@@ -361,9 +594,9 @@ function renderDashboard() {
     resumeContainer.style.display = 'block';
     const topThree = recentFiles.slice(0, 3);
     topThree.forEach(item => {
-      const card = document.createElement('div');
+      const card = document.createElement('a');
       card.className = 'resume-card';
-      card.onclick = () => resumePlayback(item);
+      card.href = item.url;
 
       const percent = item.progress.percent || 0;
       let progressLabel = '';
@@ -427,6 +660,7 @@ function renderDashboard() {
 
 // Render Course Catalog full list
 function renderFullCatalog() {
+  if (!state.coursesLoaded) return; // As in renderDashboard
   const fullGrid = document.getElementById('full-courses-grid');
   fullGrid.innerHTML = '';
   renderCourseList(state.courses, fullGrid, 'full-catalog-search', 'full-catalog-filter-status');
@@ -477,7 +711,6 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
   filtered.forEach(c => {
     const card = document.createElement('div');
     card.className = 'course-card';
-    card.onclick = () => openCourse(c.id);
 
     // SVG Circular Progress
     const radius = 20;
@@ -533,7 +766,7 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
           <div class="ring-percent">${c.progressPercent}%</div>
         </div>
       </div>
-      <div class="course-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
+      <a class="course-title" href="${courseUrl(c)}" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</a>
       <div class="course-meta">
         ${timeText ? `
         <div class="course-meta-row course-time-row">
@@ -915,9 +1148,12 @@ async function runGlobalSearch() {
   const kind = document.getElementById('global-search-kind').value;
   const status = document.getElementById('global-search-status');
   if (searchRequest) searchRequest.abort(); // Superseded by what's typed now
+  // The address follows the search, replacing its history entry rather than adding one per word typed
+  if (state.view === 'search') updateUrl(true);
   if (!query) {
     status.textContent = '';
     renderSearchResults([]);
+    state.searchShown = { query, kind };
     return;
   }
 
@@ -928,6 +1164,7 @@ async function runGlobalSearch() {
     const res = await fetch(`/api/search?${params}`, { signal: searchRequest.signal });
     const data = await res.json();
     renderSearchResults(data.results);
+    state.searchShown = { query, kind }; // What routeTo finds already on screen when Back returns here
     status.textContent = data.total === 0 ? 'No matches.' : `${data.total} ${data.total === 1 ? 'lesson matches' : 'lessons match'}${data.total > data.results.length ? `; showing the top ${data.results.length}` : ''}.`;
     if (data.indexing) {
       const progress = data.progress ? ` (${data.progress.done} of ${data.progress.total} files)` : '';
@@ -958,9 +1195,18 @@ function renderSearchResults(results) {
   const list = document.getElementById('global-search-results');
   list.innerHTML = '';
   results.forEach((result) => {
-    const card = document.createElement('button');
-    card.type = 'button';
+    // A link to the result's page, unless it has left the catalog since this page loaded
+    const url = searchResultUrl(result);
+    const card = document.createElement(url ? 'a' : 'button');
     card.className = 'search-result';
+    if (url) {
+      card.href = url;
+    } else {
+      card.type = 'button';
+      card.addEventListener('click', () => showToast(state.courses.some(c => c.id === result.courseId)
+        ? 'That lesson is no longer in the course folder'
+        : 'That course is no longer in your watched folders'));
+    }
 
     const meta = document.createElement('div');
     meta.className = 'search-result-meta';
@@ -994,71 +1240,57 @@ function renderSearchResults(results) {
     appendHighlighted(snippet, result.snippet, result.highlights);
 
     card.append(meta, title, badges, snippet);
-    card.addEventListener('click', () => openSearchResult(result));
     list.appendChild(card);
   });
 }
 
-// Open a result's lesson, at the matching moment for lectures (or the course summary)
-function openSearchResult(result) {
+// Where a result opens: its lesson, at the matching moment for lectures (or the course summary). Null when its
+// course or lesson isn't in the catalog any more.
+function searchResultUrl(result) {
   const course = state.courses.find(c => c.id === result.courseId);
-  if (!course) {
-    showToast('That course is no longer in your watched folders');
-    return;
-  }
-  if (!result.filePath) {
-    localStorage.setItem('current-workspace-tab', 'course-summary');
-    openCourse(course.id);
-    return;
-  }
+  if (!course) return null;
+  if (!result.filePath) return `${courseUrl(course)}/summary`;
   const item = course.sections.flatMap(s => s.items).find(i => i.path === result.filePath);
-  if (!item) {
-    showToast('That lesson is no longer in the course folder');
-    return;
-  }
-  localStorage.setItem('current-workspace-tab', LESSON_TYPES.includes(item.type) ? 'lessons' : 'resources');
-  if (result.start !== null && isMediaItem(item)) {
-    state.pendingSeekTime = result.start;
-  }
-  openCourse(course.id, item.path);
+  if (!item) return null;
+  return result.start !== null && isMediaItem(item) ? `${itemUrl(course, item)}?t=${Math.floor(result.start)}` : itemUrl(course, item);
 }
 
 // --- ================== WORKSPACE VIEW ACTIONS ================== ---
 
-// Clicked Resume from Dashboard card
-function resumePlayback(item) {
-  // Find full course object
-  const course = state.courses.find(c => c.id === item.courseId);
-  if (!course) return;
-  
-  // Open on the tab that lists this item (the last-used tab may be Summary or the other list), and
-  // let openCourse select the course's own item object rather than this dashboard copy
-  localStorage.setItem('current-workspace-tab', LESSON_TYPES.includes(item.type) ? 'lessons' : 'resources');
-  openCourse(item.courseId, item.path);
-}
-
-// Open Course outline view
-function openCourse(courseId, restoreItemPath = null) {
+// Open Course outline view, on the given sidebar tab, with an item open (see routeTo)
+function openCourse(courseId, restoreItemPath = null, tab = 'lessons') {
   const course = state.courses.find(c => c.id === courseId);
   if (!course) return;
+
+  // Stop the open lesson: Back/Forward from a lesson to another course or its course's page stays in the
+  // workspace, where switchView doesn't pause it. Its position is saved now, since loading another video
+  // drops the queued pause event (as in selectItem).
+  flushReadingPosition();
+  tickStudyTime();
+  stopProgressInterval();
+  cancelAutoplay();
+  const video = document.getElementById('main-video-player');
+  if (!video.paused) {
+    video.pause();
+    saveVideoProgress(true);
+  }
+
+  // Another course starts a new conversation; reopening this one (e.g. with Back) keeps it
+  if (!state.currentCourse || state.currentCourse.id !== courseId) {
+    state.courseChatHistory = [];
+    renderCourseChatMessages(); // Clear the previous course's conversation from the panel
+
+    const chatPanel = document.getElementById('course-chat-panel');
+    if (chatPanel) chatPanel.style.display = 'none';
+    const toggleBtn = document.getElementById('btn-toggle-course-chat');
+    if (toggleBtn) toggleBtn.style.display = 'none';
+  }
 
   state.currentCourse = course;
   // Nothing is open yet in this course; an item left over from the previous course would otherwise
   // reappear (with its breadcrumbs) when switching sidebar tabs
   state.currentItem = null;
   state.currentSection = null;
-  state.courseChatHistory = [];
-  renderCourseChatMessages(); // Clear the previous course's conversation from the panel
-  
-  const chatPanel = document.getElementById('course-chat-panel');
-  if (chatPanel) chatPanel.style.display = 'none';
-  const toggleBtn = document.getElementById('btn-toggle-course-chat');
-  if (toggleBtn) toggleBtn.style.display = 'none';
-
-  localStorage.setItem('current-course-id', courseId);
-  if (!restoreItemPath) {
-    localStorage.removeItem('current-item-path');
-  }
   switchView('workspace');
 
   document.getElementById('workspace-course-title').textContent = course.title;
@@ -1069,11 +1301,9 @@ function openCourse(courseId, restoreItemPath = null) {
     watchBtn.style.display = course.progressPercent === 100 ? 'none' : '';
   }
   
-  // Restore tab
-  const storedTab = localStorage.getItem('current-workspace-tab') || 'lessons';
-  switchWorkspaceTab(storedTab);
+  switchWorkspaceTab(tab);
 
-  if (storedTab !== 'course-summary') {
+  if (tab !== 'course-summary') {
     // Load blank state viewer or restored item
     if (restoreItemPath) {
       let foundItem = null;
@@ -1103,7 +1333,7 @@ function openCourse(courseId, restoreItemPath = null) {
   if (!state.currentItem) {
     document.getElementById('crumb-section').textContent = course.title;
   }
-  if (storedTab !== 'course-summary' && !restoreItemPath) {
+  if (tab !== 'course-summary' && !restoreItemPath) {
     document.getElementById('crumb-item').textContent = '';
     document.getElementById('crumb-item').classList.remove('active');
   }
@@ -1159,13 +1389,15 @@ function renderCourseOutline() {
     content.className = 'section-content';
 
     itemsFiltered.forEach(item => {
-      const itemRow = document.createElement('div');
+      // A link to the item's page (see routeTo), which opens it in the viewer
+      const itemRow = document.createElement('a');
       itemRow.className = 'outline-item';
+      itemRow.href = itemUrl(state.currentCourse, item);
       if (state.currentItem && state.currentItem.path === item.path) {
         itemRow.classList.add('active');
       }
       itemRow.dataset.path = item.path;
-      
+
       // Determine file icon
       let typeIcon = '';
       if (item.type === 'video') {
@@ -1201,13 +1433,6 @@ function renderCourseOutline() {
       `;
       // Bound in JS: an inline onclick string breaks on paths containing quotes (e.g. "What's Next.mp4")
       itemRow.querySelector('.item-check-checkbox').addEventListener('click', (e) => toggleItemComplete(e, item.path));
-
-      // Entire row click (except checking) selects the item to view
-      itemRow.addEventListener('click', (e) => {
-        if (!e.target.closest('.item-check-checkbox')) {
-          selectItem(item, section);
-        }
-      });
 
       content.appendChild(itemRow);
     });
@@ -1267,13 +1492,14 @@ function renderCourseResources() {
     content.className = 'section-content';
 
     itemsFiltered.forEach(item => {
-      const itemRow = document.createElement('div');
+      const itemRow = document.createElement('a');
       itemRow.className = 'outline-item';
+      itemRow.href = itemUrl(state.currentCourse, item);
       if (state.currentItem && state.currentItem.path === item.path) {
         itemRow.classList.add('active');
       }
       itemRow.dataset.path = item.path;
-      
+
       // Determine file icon
       let typeIcon = '';
       if (item.type === 'image') {
@@ -1301,13 +1527,6 @@ function renderCourseResources() {
       `;
       itemRow.querySelector('.item-check-checkbox').addEventListener('click', (e) => toggleItemComplete(e, item.path));
 
-      // Entire row click selects the item to view
-      itemRow.addEventListener('click', (e) => {
-        if (!e.target.closest('.item-check-checkbox')) {
-          selectItem(item, section);
-        }
-      });
-
       content.appendChild(itemRow);
     });
 
@@ -1319,7 +1538,6 @@ function renderCourseResources() {
 function switchWorkspaceTab(tabName) {
   if (tabName !== 'lessons' && tabName !== 'resources' && tabName !== 'course-summary') return;
   state.currentWorkspaceTab = tabName;
-  localStorage.setItem('current-workspace-tab', tabName);
 
   const tabLessons = document.getElementById('tab-lessons');
   const tabResources = document.getElementById('tab-resources');
@@ -1404,6 +1622,7 @@ function switchWorkspaceTab(tabName) {
       document.getElementById('crumb-item').classList.remove('active');
     }
   }
+  updateUrl();
 }
 
 function renderActiveWorkspaceOutline() {
@@ -1469,7 +1688,6 @@ function selectItem(item, section = null) {
   }
 
   state.currentItem = item;
-  localStorage.setItem('current-item-path', item.path);
   if (section) {
     state.currentSection = section;
   } else {
@@ -1549,6 +1767,7 @@ function selectItem(item, section = null) {
   }
 
   tickStudyTime(); // Start crediting the new lesson
+  updateUrl();
 }
 
 // Toggle visible containers inside viewport
@@ -2425,7 +2644,8 @@ function zoomPdf(direction) {
 
 // Toggle Complete via check box
 async function toggleItemComplete(event, path) {
-  event.stopPropagation(); // prevent selectItem firing
+  event.preventDefault(); // The checkbox sits in the item's link: don't open the item
+  event.stopPropagation();
   
   // Find item
   let matchedItem = null;
