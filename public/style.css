@@ -536,6 +536,16 @@ h1 {
   color: #fcd34d;
 }
 
+.resume-type-badge.audio {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+}
+
+.resume-type-badge.docx {
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+}
+
 .resume-date {
   font-size: 11px;
   color: var(--text-dim);
@@ -1244,6 +1254,65 @@ h1 {
   color: #fff;
   font-family: 'Inter', sans-serif;
   font-size: 18px;
+}
+
+/* Audio lessons: icon and title where the picture would be. Clicks pass through to the player, and the
+   bottom is left clear for captions. */
+.audio-artwork {
+  position: absolute;
+  inset: 0 0 72px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  pointer-events: none;
+  text-align: center;
+  background: radial-gradient(circle at center, rgba(139, 92, 246, 0.18), transparent 60%);
+}
+
+.audio-artwork svg {
+  width: 72px;
+  height: 72px;
+  color: var(--color-primary);
+  filter: drop-shadow(0 0 18px rgba(139, 92, 246, 0.45));
+}
+
+.audio-artwork span {
+  max-width: 560px;
+  font-family: var(--font-family-headings);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-main);
+}
+
+/* Converting a video for playback, or a file that can't play */
+.media-status-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 8, 15, 0.85);
+  z-index: 9;
+}
+
+.media-status-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 420px;
+  padding: 32px;
+  text-align: center;
+}
+
+.media-status-content p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 /* Autoplay Next Screen Overlay */

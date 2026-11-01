@@ -1,10 +1,15 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { promisify } = require('util');
 const { execFile } = require('child_process');
+const mammoth = require('mammoth');
 const { ModalClient, NotFoundError, TimeoutError } = require('modal');
 const { PDFParse } = require('pdf-parse');
+
+const execFileAsync = promisify(execFile);
 
 async function pdfParse(dataBuffer) {
   const parser = new PDFParse({ data: dataBuffer });
@@ -18,6 +23,9 @@ const PORT = process.env.PORT || 3005;
 const HOST = '127.0.0.1';
 // COURSE_VIEWER_DB lets tests use a throwaway database
 const DB_FILE = process.env.COURSE_VIEWER_DB || path.join(__dirname, 'db.json');
+// Regenerable data, like browser-playable copies of videos, lives outside the course folders.
+// COURSE_VIEWER_CACHE lets tests use a throwaway cache.
+const CACHE_DIR = process.env.COURSE_VIEWER_CACHE || path.join(os.homedir(), 'Library', 'Caches', 'course-viewer');
 const ENV_FILE = path.join(__dirname, '.env');
 
 // Load API credentials (FIREWORKS_API_KEY, optional MODAL_TOKEN_ID / MODAL_TOKEN_SECRET) from .env
@@ -36,7 +44,25 @@ const MODAL_TRANSCRIBE_TIMEOUT_MS = 30 * 60 * 1000;
 
 const IGNORE_DIRS = ['node_modules', 'dist', 'build', '.git', 'venv', '.env', 'env', 'bower_components'];
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif'];
-const CODE_EXTENSIONS = ['.js', '.py', '.sh', '.json', '.css', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.yaml', '.yml', '.xml', '.sql', '.ini', '.conf'];
+const CODE_EXTENSIONS = ['.js', '.ts', '.tsx', '.py', '.sh', '.json', '.css', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.yaml', '.yml', '.xml', '.sql', '.ini', '.conf'];
+const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.mov', '.webm', '.avi'];
+// MPEG transport streams (e.g. HLS downloads) play once copied into an MP4. ".ts" can also be TypeScript.
+const TRANSPORT_STREAM_EXTENSIONS = ['.ts', '.m2ts', '.mts'];
+const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.aac', '.wav', '.ogg', '.oga', '.opus', '.flac'];
+const MEDIA_CONTENT_TYPES = {
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.oga': 'audio/ogg',
+  '.opus': 'audio/ogg', '.flac': 'audio/flac'
+};
+// Types listed under Lessons (everything else is a resource), matching LESSON_TYPES in public/app.js
+const LESSON_TYPES = ['video', 'audio', 'pdf', 'html', 'docx', 'text'];
+// Downloaded pages load on the app's own origin, where a script could call the API like the app does
+// (e.g. watch the home folder, then read files from it). Block their scripts and form posts; embedded
+// players such as Vimeo run in their own frames, which this policy doesn't reach.
+const LESSON_PAGE_POLICY = "script-src 'none'; form-action 'none'";
+// Converted copies of transport streams; the least recently watched are deleted past the size limit
+const PLAYABLE_DIR = path.join(CACHE_DIR, 'playable');
+const PLAYABLE_CACHE_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 
 // Only this machine's own pages may use the API. There are no CORS headers, so other sites can't read
 // responses; on top of that:
@@ -158,6 +184,51 @@ function pipeFile(res, filePath, options) {
   stream.pipe(res);
 }
 
+// A transport stream repeats the 0x47 sync byte every 188 bytes (every 192 in .m2ts, after a 4-byte timestamp),
+// which TypeScript source never does
+function isTransportStream(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(200);
+    const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+    return (bytesRead > 188 && header[0] === 0x47 && header[188] === 0x47) ||
+      (bytesRead > 196 && header[4] === 0x47 && header[196] === 0x47);
+  } catch (err) {
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// Lesson type of a file: video, audio, pdf, html, docx, text, image, code or other
+function getFileType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
+  if (TRANSPORT_STREAM_EXTENSIONS.includes(ext) && isTransportStream(filePath)) return 'video';
+  if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.docx') return 'docx';
+  if (ext === '.txt' || ext === '.md') return 'text';
+  if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
+  if (CODE_EXTENSIONS.includes(ext)) return 'code';
+  return 'other'; // zips, slides, spreadsheets, etc.
+}
+
+function isMediaType(type) {
+  return type === 'video' || type === 'audio';
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // Convert SRT Subtitles to VTT on the fly
 function convertSrtToVtt(srtContent) {
   return 'WEBVTT\n\n' + srtContent
@@ -169,7 +240,7 @@ function convertSrtToVtt(srtContent) {
 function processCourseTree(courseName, coursePath, sourceRoot) {
   const sectionsMap = {};
   const allSubtitles = {};
-  const videoItems = [];
+  const mediaItems = [];
 
   function traverse(currentPath, currentSectionName = 'General') {
     try {
@@ -208,25 +279,10 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
             continue;
           }
           const ext = path.extname(item.name).toLowerCase();
-          let type = 'other';
-
-          if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) {
-            type = 'video';
-          } else if (ext === '.pdf') {
-            type = 'pdf';
-          } else if (['.html', '.htm'].includes(ext)) {
-            type = 'html';
-          } else if (['.txt', '.md'].includes(ext)) {
-            type = 'text';
-          } else if (IMAGE_EXTENSIONS.includes(ext)) {
-            type = 'image';
-          } else if (CODE_EXTENSIONS.includes(ext)) {
-            type = 'code';
-          } else if (['.vtt', '.srt', '.DS_Store'].includes(ext)) {
+          if (ext === '.vtt' || ext === '.srt') {
             continue; // Skip files that are not main learning materials
-          } else {
-            type = 'other'; // docs, zips, etc.
           }
+          const type = getFileType(fullPath);
 
           if (!sectionsMap[currentSectionName]) {
             sectionsMap[currentSectionName] = [];
@@ -241,8 +297,11 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
             size: fs.statSync(fullPath).size
           };
 
-          if (type === 'video') {
-            videoItems.push(itemObj);
+          if (type === 'video' && TRANSPORT_STREAM_EXTENSIONS.includes(ext)) {
+            itemObj.remux = true; // Played from a converted copy, made on first play
+          }
+          if (isMediaType(type)) {
+            mediaItems.push(itemObj);
           }
 
           sectionsMap[currentSectionName].push(itemObj);
@@ -256,10 +315,10 @@ function processCourseTree(courseName, coursePath, sourceRoot) {
   traverse(coursePath);
 
   // Link subtitle tracks
-  for (const video of videoItems) {
-    const videoPathWithoutExt = video.path.slice(0, -path.extname(video.path).length);
-    if (allSubtitles[videoPathWithoutExt]) {
-      video.subtitlePath = allSubtitles[videoPathWithoutExt];
+  for (const media of mediaItems) {
+    const mediaPathWithoutExt = media.path.slice(0, -path.extname(media.path).length);
+    if (allSubtitles[mediaPathWithoutExt]) {
+      media.subtitlePath = allSubtitles[mediaPathWithoutExt];
     }
   }
 
@@ -305,8 +364,7 @@ function scanAllCourses() {
             courses.push(course);
           }
         } else if (item.isFile()) {
-          const ext = path.extname(item.name).toLowerCase();
-          if (['.mp4', '.mkv', '.mov', '.webm', '.avi', '.pdf', '.html', '.htm', '.txt', '.md'].includes(ext)) {
+          if (LESSON_TYPES.includes(getFileType(fullPath))) {
             looseFiles.push(item.name);
           }
         }
@@ -561,7 +619,7 @@ app.post('/api/courses/complete', (req, res) => {
       prog.completed = true;
       prog.skipped = false;
       prog.percent = 100;
-      if (item.type === 'video') {
+      if (isMediaType(item.type)) {
         if (prog.duration) {
           prog.currentTime = prog.duration;
         }
@@ -575,13 +633,90 @@ app.post('/api/courses/complete', (req, res) => {
 });
 
 
-// Video Streaming Endpoint with Range Requests Support
-app.get('/api/video', (req, res) => {
+// Codec names of a file's first video and audio streams (ffprobe ships with ffmpeg)
+async function probeCodecs(filePath) {
+  const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name', '-of', 'json', filePath]);
+  const streams = JSON.parse(stdout).streams || [];
+  const codecOf = (type) => (streams.find((s) => s.codec_type === type) || {}).codec_name || null;
+  return { video: codecOf('video'), audio: codecOf('audio') };
+}
+
+// Delete the least recently watched copies once the cache is over its size limit
+function prunePlayableCache(keepPath) {
+  try {
+    const copies = fs.readdirSync(PLAYABLE_DIR)
+      .filter((name) => name.endsWith('.mp4'))
+      .map((name) => {
+        const copyPath = path.join(PLAYABLE_DIR, name);
+        const stat = fs.statSync(copyPath);
+        return { copyPath, size: stat.size, mtimeMs: stat.mtimeMs };
+      })
+      .sort((a, b) => a.mtimeMs - b.mtimeMs);
+    let total = copies.reduce((sum, copy) => sum + copy.size, 0);
+    for (const copy of copies) {
+      if (total <= PLAYABLE_CACHE_MAX_BYTES) break;
+      if (copy.copyPath === keepPath) continue;
+      fs.unlinkSync(copy.copyPath);
+      total -= copy.size;
+    }
+  } catch (err) {
+    console.error('Error pruning converted video cache:', err);
+  }
+}
+
+const activeConversions = new Map();
+
+// Browsers can't play MPEG transport streams, so copy their streams into an MP4 on first play and serve that
+// copy from then on. Only codecs browsers lack are re-encoded, which is slow; most HLS downloads just get copied.
+async function getPlayableCopy(filePath, stat) {
+  const key = crypto.createHash('sha1').update(`${filePath}:${stat.size}:${stat.mtimeMs}`).digest('hex');
+  const copyPath = path.join(PLAYABLE_DIR, `${key}.mp4`);
+  if (fs.existsSync(copyPath)) {
+    const now = new Date();
+    fs.utimesSync(copyPath, now, now); // Mark it recently watched, so pruning keeps it
+    return copyPath;
+  }
+  if (activeConversions.has(copyPath)) {
+    return activeConversions.get(copyPath);
+  }
+
+  const conversion = (async () => {
+    const partPath = `${copyPath}.part`;
+    try {
+      fs.mkdirSync(PLAYABLE_DIR, { recursive: true });
+      const codecs = await probeCodecs(filePath);
+      const copyVideo = codecs.video === 'h264' || codecs.video === 'hevc';
+      const args = [
+        '-hide_banner', '-loglevel', 'error', '-i', filePath, '-map', '0:v:0?', '-map', '0:a:0?',
+        '-c:v', copyVideo ? 'copy' : 'libx264', ...(copyVideo ? [] : ['-preset', 'veryfast']),
+        ...(codecs.video === 'hevc' ? ['-tag:v', 'hvc1'] : []), // Safari and Chrome on macOS expect this tag
+        '-c:a', codecs.audio === 'aac' ? 'copy' : 'aac', '-movflags', '+faststart', '-f', 'mp4', '-y', partPath
+      ];
+      console.log(`[FFmpeg] Converting ${filePath} for playback (${copyVideo ? 'copying' : 're-encoding'} video)...`);
+      await execFileAsync('ffmpeg', args);
+      fs.renameSync(partPath, copyPath);
+      prunePlayableCache(copyPath);
+      return copyPath;
+    } catch (err) {
+      fs.rmSync(partPath, { force: true });
+      throw err;
+    }
+  })();
+  activeConversions.set(copyPath, conversion);
+  try {
+    return await conversion;
+  } finally {
+    activeConversions.delete(copyPath);
+  }
+}
+
+// Video and audio streaming endpoint with range request support
+app.get('/api/video', async (req, res) => {
   const filePath = req.query.path;
   if (!filePath) {
     return res.status(400).send('Path is required');
   }
-  const stat = statFile(filePath);
+  let stat = statFile(filePath);
   if (!stat) {
     return res.status(404).send('File not found');
   }
@@ -590,18 +725,25 @@ app.get('/api/video', (req, res) => {
   }
 
   const ext = path.extname(filePath).toLowerCase();
-  if (!['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) {
+  if (!isMediaType(getFileType(filePath))) {
     return res.status(403).send('Forbidden file type');
+  }
+
+  let streamPath = filePath;
+  let contentType = MEDIA_CONTENT_TYPES[ext];
+  if (TRANSPORT_STREAM_EXTENSIONS.includes(ext)) {
+    try {
+      streamPath = await getPlayableCopy(filePath, stat);
+    } catch (err) {
+      console.error(`Error converting ${filePath} for playback:`, err);
+      return res.status(500).send('Could not convert this video for the browser');
+    }
+    stat = fs.statSync(streamPath);
+    contentType = 'video/mp4';
   }
 
   const fileSize = stat.size;
   const range = req.headers.range;
-
-  let contentType = 'video/mp4';
-  if (ext === '.webm') contentType = 'video/webm';
-  else if (ext === '.mkv') contentType = 'video/x-matroska';
-  else if (ext === '.avi') contentType = 'video/x-msvideo';
-  else if (ext === '.mov') contentType = 'video/quicktime';
 
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
@@ -628,14 +770,14 @@ app.get('/api/video', (req, res) => {
     };
 
     res.writeHead(206, head);
-    pipeFile(res, filePath, { start, end });
+    pipeFile(res, streamPath, { start, end });
   } else {
     const head = {
       'Content-Length': fileSize,
       'Content-Type': contentType,
     };
     res.writeHead(200, head);
-    pipeFile(res, filePath);
+    pipeFile(res, streamPath);
   }
 });
 
@@ -693,10 +835,7 @@ app.get('/api/file', (req, res) => {
     contentType = 'application/pdf';
   } else if (ext === '.html' || ext === '.htm') {
     contentType = 'text/html';
-    // Downloaded pages load on the app's own origin, where a script could call the API like the app does
-    // (e.g. watch the home folder, then read files from it). Block their scripts and form posts; embedded
-    // players such as Vimeo run in their own frames, which this policy doesn't reach.
-    res.setHeader('Content-Security-Policy', "script-src 'none'; form-action 'none'");
+    res.setHeader('Content-Security-Policy', LESSON_PAGE_POLICY);
   } else if (textExtensions.includes(ext)) {
     contentType = 'text/plain';
   } else if (ext === '.png') {
@@ -709,6 +848,47 @@ app.get('/api/file', (req, res) => {
 
   res.setHeader('Content-Type', contentType);
   pipeFile(res, filePath);
+});
+
+// Word documents, converted to a plain page and shown in the lesson frame like downloaded HTML
+app.get('/api/docx', async (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) {
+    return res.status(400).send('Path is required');
+  }
+  if (!statFile(filePath)) {
+    return res.status(404).send('File not found');
+  }
+  if (!isInWatchedFolder(filePath)) {
+    return res.status(403).send(OUTSIDE_WATCHED_FOLDERS);
+  }
+  if (getFileType(filePath) !== 'docx') {
+    return res.status(403).send('Forbidden file type');
+  }
+
+  try {
+    // Mammoth escapes the document's text; links and images stay inert under the lesson page policy
+    const { value: body } = await mammoth.convertToHtml({ path: filePath });
+    res.setHeader('Content-Security-Policy', LESSON_PAGE_POLICY);
+    res.type('html').send(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(path.basename(filePath))}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; max-width: 820px; margin: 0 auto; padding: 40px 32px 80px; line-height: 1.65; color: #1f2937; background: #fff; }
+  img { max-width: 100%; height: auto; }
+  table { border-collapse: collapse; margin: 16px 0; }
+  td, th { border: 1px solid #d1d5db; padding: 6px 10px; vertical-align: top; }
+  a { color: #6d28d9; }
+</style>
+</head>
+<body>${body}</body>
+</html>`);
+  } catch (err) {
+    console.error(`Error converting ${filePath}:`, err);
+    res.status(500).send('Could not read this Word document');
+  }
 });
 
 // Reveal file in Mac Finder
@@ -1263,11 +1443,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
 
     courseTree.sections.forEach(sec => {
       sec.items.forEach(item => {
-        const ext = path.extname(item.path).toLowerCase();
-        const isEligible = item.type === 'video' ||
-                           (item.type === 'text' && (ext === '.md' || ext === '.txt')) ||
-                           (item.type === 'html' && (ext === '.html' || ext === '.htm')) ||
-                           (item.type === 'pdf' && ext === '.pdf');
+        const isEligible = ['video', 'audio', 'text', 'html', 'pdf', 'docx'].includes(item.type);
         if (isEligible) {
           allItems.push({
             ...item,
@@ -1309,7 +1485,7 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
         notesContent = fs.readFileSync(itemSummaryPath, 'utf8');
         hasNotes = true;
       } else {
-        if (item.type === 'video') {
+        if (isMediaType(item.type)) {
           const videoTranscriptPath = baseWithoutExt + '.transcript.txt';
           let transcript = '';
           if (fs.existsSync(videoTranscriptPath)) {
@@ -1423,6 +1599,23 @@ async function runCourseSummaryJob(courseId, coursePath, selectedFiles) {
             }
           } catch (err) {
             logMessage(`[Error] Failed to process PDF file "${item.name}": ${err.message}`);
+          }
+        } else if (item.type === 'docx') {
+          logMessage(`Reading Word document "${item.name}" and generating notes...`);
+          try {
+            const { value: text } = await mammoth.extractRawText({ path: item.path });
+            if (text.trim()) {
+              const summary = await summarizeContent(text, 'document');
+              fs.writeFileSync(itemSummaryPath, summary, 'utf8');
+              // Save the extracted text to transcript.txt so users can chat with it
+              fs.writeFileSync(baseWithoutExt + '.transcript.txt', text, 'utf8');
+              notesContent = summary;
+              hasNotes = true;
+            } else {
+              logMessage(`[Warning] Skipping empty Word document "${item.name}".`);
+            }
+          } catch (err) {
+            logMessage(`[Error] Failed to process Word document "${item.name}": ${err.message}`);
           }
         }
       }
@@ -1579,7 +1772,8 @@ async function generateSummaryForPath(filePath) {
       }
     }
 
-    if (['.html', '.htm'].includes(ext)) {
+    const type = getFileType(filePath);
+    if (type === 'html') {
       if (existingTranscript && existingTranscript.trim()) {
         transcript = existingTranscript;
       } else {
@@ -1591,7 +1785,7 @@ async function generateSummaryForPath(filePath) {
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
       return { transcript, summary };
-    } else if (ext === '.pdf') {
+    } else if (type === 'pdf') {
       if (existingTranscript && existingTranscript.trim()) {
         transcript = existingTranscript;
       } else {
@@ -1607,7 +1801,21 @@ async function generateSummaryForPath(filePath) {
       fs.writeFileSync(summaryPath, summary, 'utf8');
 
       return { transcript, summary };
-    } else if (['.txt', '.md'].includes(ext) || CODE_EXTENSIONS.includes(ext)) {
+    } else if (type === 'docx') {
+      if (existingTranscript && existingTranscript.trim()) {
+        transcript = existingTranscript;
+      } else {
+        transcript = (await mammoth.extractRawText({ path: filePath })).value;
+        if (!transcript.trim()) {
+          throw new Error('Word document contains no text.');
+        }
+        fs.writeFileSync(transcriptPath, transcript, 'utf8');
+      }
+      const summary = await summarizeContent(transcript, 'document');
+      fs.writeFileSync(summaryPath, summary, 'utf8');
+
+      return { transcript, summary };
+    } else if (type === 'text' || type === 'code') {
       if (existingTranscript && existingTranscript.trim()) {
         transcript = existingTranscript;
       } else {
@@ -1620,7 +1828,11 @@ async function generateSummaryForPath(filePath) {
       return { transcript, summary };
     }
 
-    // Video files fallback
+    if (!isMediaType(type)) {
+      throw new Error('AI notes are not available for this file type.');
+    }
+
+    // Video and audio: use the transcript, else subtitles, else transcribe on Modal
     let subtitlePath = '';
     if (fs.existsSync(baseWithoutExt + '.vtt')) {
       subtitlePath = baseWithoutExt + '.vtt';
@@ -1737,10 +1949,10 @@ app.post('/api/video/chat', async (req, res) => {
   }
 
   try {
-    const isVideo = ['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext.toLowerCase());
+    const isVideo = isMediaType(getFileType(videoPath));
 
     const systemInstruction = `You are an expert AI tutor helping a student study a course.
-Below is the ${isVideo ? 'transcript of the video lecture they are currently watching' : 'content of the document they are currently studying'}.
+Below is the ${isVideo ? 'transcript of the recorded lecture they are currently studying' : 'content of the document they are currently studying'}.
 Analyze the content carefully and answer the student's questions based on it.
 If the answer is not directly found in the text, you can use your general knowledge to supplement it, but prioritize information from the course material and make sure to clarify when you are adding external context.
 Keep your answers clear, educational, and formatting-rich (use markdown, code snippets, lists, bold terms).

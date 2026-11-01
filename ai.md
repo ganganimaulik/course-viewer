@@ -64,9 +64,12 @@ The Express app exposes the following APIs:
 - `POST /api/courses/complete` `{ courseId }`: Marks all lessons in a course as completed.
 
 ### File Delivery
-- `GET /api/video?path=<path>`: Streams video file (supports range/partial content requests).
+- `GET /api/video?path=<path>`: Streams a video or audio file (supports range/partial content requests). MPEG transport streams (`.ts`, recognised by their sync bytes, since `.ts` can also be TypeScript) are streamed from an MP4 copy that `getPlayableCopy()` makes with ffmpeg on first play, cached in `CACHE_DIR` (`~/Library/Caches/course-viewer`, or `COURSE_VIEWER_CACHE`).
 - `GET /api/subtitle?path=<path>`: Reads `.srt` or `.vtt` file (converts SRT subtitles to WebVTT on-the-fly).
 - `GET /api/file?path=<path>`: Serves files with appropriate headers (PDF, HTML, images, code, or plain text).
+- `GET /api/docx?path=<path>`: Converts a Word document to an HTML page with mammoth, served with the lesson page policy.
+
+File types come from `getFileType()` in `server.js`: `video`, `audio`, `pdf`, `html`, `docx`, `text` (listed as lessons) and `image`, `code`, `other` (resources).
 
 ### Mac System Commands
 - `POST /api/open-in-finder` `{ path }`: Opens Finder with the target file highlighted (`open -R`).

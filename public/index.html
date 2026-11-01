@@ -280,6 +280,21 @@
                         <!-- Video sources and tracks loaded dynamically -->
                       </video>
 
+                      <!-- Audio lessons have no picture: show what's playing instead -->
+                      <div class="audio-artwork" id="audio-artwork" style="display:none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                        <span id="audio-artwork-title"></span>
+                      </div>
+
+                      <!-- Converting a .ts video, or a file the browser can't play -->
+                      <div class="media-status-overlay" id="media-status-overlay" style="display:none;">
+                        <div class="media-status-content">
+                          <div class="spinner" id="media-status-spinner"></div>
+                          <p id="media-status-text"></p>
+                          <button class="secondary-btn" id="media-status-open-btn" onclick="openInSystem()" style="display:none;">Open in Default App</button>
+                        </div>
+                      </div>
+
                       <!-- Autoplay Countdown Overlay -->
                       <div class="autoplay-overlay" id="autoplay-overlay" style="display:none;">
                         <div class="autoplay-content">

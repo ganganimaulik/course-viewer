@@ -2,7 +2,14 @@
 const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3005' : '';
 
 // File types listed under the Lessons tab; all other types are listed under Resources
-const LESSON_TYPES = ['video', 'pdf', 'html', 'text'];
+const LESSON_TYPES = ['video', 'audio', 'pdf', 'html', 'docx', 'text'];
+// File types that can get AI notes and chat
+const AI_NOTES_TYPES = ['video', 'audio', 'pdf', 'html', 'docx', 'text', 'code'];
+
+// Audio plays in the same player as video, with the same progress tracking
+function isMediaItem(item) {
+  return !!item && (item.type === 'video' || item.type === 'audio');
+}
 
 // --- APPLICATION STATE ---
 let state = {
@@ -300,7 +307,7 @@ function renderDashboard() {
     course.sections.forEach(sec => {
       sec.items.forEach(item => {
         if (item.progress) {
-          if (item.type === 'video' && item.progress.currentTime) {
+          if (isMediaItem(item) && item.progress.currentTime) {
             totalWatchedSeconds += item.progress.currentTime;
           }
           if (item.progress.completed || item.progress.skipped) {
@@ -347,7 +354,7 @@ function renderDashboard() {
       let progressLabel = '';
       if (item.progress.skipped) {
         progressLabel = 'Skipped';
-      } else if (item.type === 'video') {
+      } else if (isMediaItem(item)) {
         progressLabel = `${formatTime(item.progress.currentTime)} / ${formatTime(item.progress.duration)} (${percent}%)`;
       } else {
         progressLabel = item.progress.completed ? 'Completed' : 'Started';
@@ -457,12 +464,14 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
     const strokeOffset = circ - (c.progressPercent / 100) * circ;
     
     // Icon counters
-    let videos = 0, pdfs = 0, htmls = 0, texts = 0, others = 0;
+    let videos = 0, audios = 0, pdfs = 0, htmls = 0, docs = 0, texts = 0, others = 0;
     c.sections.forEach(sec => {
       sec.items.forEach(i => {
         if (i.type === 'video') videos++;
+        else if (i.type === 'audio') audios++;
         else if (i.type === 'pdf') pdfs++;
         else if (i.type === 'html') htmls++;
+        else if (i.type === 'docx') docs++;
         else if (i.type === 'text') texts++;
         else others++;
       });
@@ -517,6 +526,16 @@ function renderCourseList(coursesList, targetContainer, searchInputId, statusFil
         <div class="course-meta-row">
           <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
           <span>${htmls} HTML Webpages</span>
+        </div>` : ''}
+        ${audios > 0 ? `
+        <div class="course-meta-row">
+          <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <span>${audios} Audio Lessons</span>
+        </div>` : ''}
+        ${docs > 0 ? `
+        <div class="course-meta-row">
+          <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="8 12 9.5 18 12 14 14.5 18 16 12"/></svg>
+          <span>${docs} Word Documents</span>
         </div>` : ''}
       </div>
     `;
@@ -648,7 +667,7 @@ function renderCourseOutline() {
 
   state.currentCourse.sections.forEach(section => {
     let itemsFiltered = section.items.filter(item => {
-      const isCore = ['video', 'pdf', 'html', 'text'].includes(item.type);
+      const isCore = LESSON_TYPES.includes(item.type);
       const matchesSearch = item.name.toLowerCase().includes(searchQuery);
       return isCore && matchesSearch;
     });
@@ -703,6 +722,10 @@ function renderCourseOutline() {
         typeIcon = '<svg class="outline-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
       } else if (item.type === 'html') {
         typeIcon = '<svg class="outline-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+      } else if (item.type === 'audio') {
+        typeIcon = '<svg class="outline-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+      } else if (item.type === 'docx') {
+        typeIcon = '<svg class="outline-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="8 12 9.5 18 12 14 14.5 18 16 12"/></svg>';
       } else if (item.type === 'text') {
         typeIcon = '<svg class="outline-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
       } else {
@@ -1020,7 +1043,7 @@ function selectItem(item, section = null) {
   // Toggle based on file type
   showViewerPanel(item.type);
 
-  if (item.type === 'video') {
+  if (isMediaItem(item)) {
     loadVideoPlayer(item);
   } else if (item.type === 'pdf') {
     const iframe = document.getElementById('pdf-frame');
@@ -1029,6 +1052,10 @@ function selectItem(item, section = null) {
   } else if (item.type === 'html') {
     const iframe = document.getElementById('html-frame');
     iframe.src = `${API_BASE}/api/file?path=${encodeURIComponent(item.path)}`;
+    saveItemStarted(item);
+  } else if (item.type === 'docx') {
+    const iframe = document.getElementById('html-frame');
+    iframe.src = `${API_BASE}/api/docx?path=${encodeURIComponent(item.path)}`;
     saveItemStarted(item);
   } else if (item.type === 'text') {
     loadTextViewer(item);
@@ -1043,12 +1070,11 @@ function selectItem(item, section = null) {
     document.getElementById('other-file-ext').textContent = item.extension;
   }
 
-  // AI sidebar support for eligible types (video, html, text, code, pdf)
-  const eligibleTypes = ['video', 'html', 'text', 'code', 'pdf'];
+  // AI sidebar support for eligible types
   const btnToggleSidebar = document.getElementById('btn-toggle-ai-sidebar');
   const extraSidebar = document.getElementById('video-extra-sidebar');
 
-  if (eligibleTypes.includes(item.type)) {
+  if (AI_NOTES_TYPES.includes(item.type)) {
     if (btnToggleSidebar) btnToggleSidebar.style.display = 'flex';
     if (extraSidebar) {
       const isCollapsed = localStorage.getItem('video-extra-sidebar-collapsed') !== 'false';
@@ -1072,8 +1098,10 @@ function showViewerPanel(type) {
   const panels = {
     blank: 'viewer-blank',
     video: 'viewer-video-container',
+    audio: 'viewer-video-container',
     pdf: 'viewer-pdf-container',
     html: 'viewer-html-container',
+    docx: 'viewer-html-container',
     text: 'viewer-text-container',
     image: 'viewer-image-container',
     code: 'viewer-text-container',
@@ -1147,6 +1175,7 @@ function initVideoPlayerEvents() {
   });
 
   video.addEventListener('loadedmetadata', () => {
+    setMediaStatus(null);
     document.getElementById('video-total-duration').textContent = formatTime(video.duration);
     
     // Set speed rate
@@ -1178,6 +1207,11 @@ function initVideoPlayerEvents() {
     }
   });
 
+  // Decoding failures after loading starts land here; failed loads land on the <source> (see loadVideoPlayer)
+  video.addEventListener('error', () => {
+    if (state.videoItem) showMediaError(state.videoItem);
+  });
+
   video.addEventListener('enterpictureinpicture', () => {
     showToast('Picture-in-Picture active');
   });
@@ -1201,7 +1235,14 @@ function loadVideoPlayer(item) {
   // Set video source
   const source = document.createElement('source');
   source.src = `${API_BASE}/api/video?path=${encodeURIComponent(item.path)}`;
+  // A source that fails to load reports it here, not on the <video>
+  source.addEventListener('error', () => showMediaError(item));
   video.appendChild(source);
+
+  // Audio has no picture, so show what's playing where it would be
+  document.getElementById('audio-artwork').style.display = item.type === 'audio' ? 'flex' : 'none';
+  document.getElementById('audio-artwork-title').textContent = item.name;
+  setMediaStatus(item.remux ? 'Converting this video so the browser can play it (first time only)...' : null);
 
   // If subtitle track is present
   if (item.subtitlePath) {
@@ -1216,6 +1257,23 @@ function loadVideoPlayer(item) {
 
   video.load();
   video.play().catch(e => console.log("Autoplay blocked by browser. User gesture required."));
+}
+
+// Message over the player: a spinner while a video is converted, or a playback error with a way out
+function setMediaStatus(message, isError = false) {
+  const overlay = document.getElementById('media-status-overlay');
+  overlay.style.display = message ? 'flex' : 'none';
+  if (!message) return;
+  document.getElementById('media-status-text').textContent = message;
+  document.getElementById('media-status-spinner').style.display = isError ? 'none' : '';
+  document.getElementById('media-status-open-btn').style.display = isError ? '' : 'none';
+}
+
+function showMediaError(item) {
+  if (state.videoItem !== item) return; // An earlier lesson's late error
+  setMediaStatus(item.remux
+    ? "This video couldn't be converted for the browser."
+    : "This file can't be played in the browser.", true);
 }
 
 function togglePlay() {
@@ -1300,7 +1358,7 @@ function initKeyboardShortcuts() {
     }
 
     // Only run shortcut actions if viewing the workspace and currently loaded item is a video
-    if (state.view !== 'workspace' || !state.currentItem || state.currentItem.type !== 'video') {
+    if (state.view !== 'workspace' || !isMediaItem(state.currentItem)) {
       return;
     }
 
@@ -1700,7 +1758,7 @@ async function saveCompletedState(item, completed) {
     };
     
     // For video files, keep current time or reset to start if marking incomplete
-    if (item.type === 'video') {
+    if (isMediaItem(item)) {
       const video = document.getElementById('main-video-player');
       // If currently playing item is matching
       if (state.currentItem && state.currentItem.path === item.path) {
@@ -2178,10 +2236,9 @@ function switchVideoExtraTab(tabName) {
 function getEligibleItemsList() {
   const list = [];
   if (!state.currentCourse || !state.currentCourse.sections) return list;
-  const eligibleTypes = ['video', 'pdf', 'html', 'text', 'code'];
   state.currentCourse.sections.forEach(sec => {
     sec.items.forEach(item => {
-      if (eligibleTypes.includes(item.type)) {
+      if (AI_NOTES_TYPES.includes(item.type)) {
         list.push(item);
       }
     });
@@ -2194,7 +2251,7 @@ async function loadVideoMetadata(item) {
   const summaryBody = document.getElementById('summary-body');
   if (!transcriptBody || !summaryBody) return;
   
-  const isVideo = item.type === 'video';
+  const isVideo = isMediaItem(item);
   transcriptBody.innerHTML = `<p class="empty-pane-msg">Checking for ${isVideo ? 'transcript' : 'extracted text'}...</p>`;
   summaryBody.innerHTML = '<p class="empty-pane-msg">Checking for summary...</p>';
 
@@ -2226,7 +2283,7 @@ async function loadVideoMetadata(item) {
   }
   renderChatMessages();
   
-  const hasAi = state.aiConfig && state.aiConfig.llmConfigured && (item.type !== 'video' || state.aiConfig.transcriptionConfigured);
+  const hasAi = state.aiConfig && state.aiConfig.llmConfigured && (!isMediaItem(item) || state.aiConfig.transcriptionConfigured);
 
   try {
     const res = await fetch(`${API_BASE}/api/video/metadata?path=${encodeURIComponent(item.path)}`);
@@ -2294,8 +2351,7 @@ async function loadVideoMetadata(item) {
 }
 
 async function generateTranscriptAndSummaryAction() {
-  const eligibleTypes = ['video', 'html', 'text', 'code', 'pdf'];
-  if (!state.currentItem || !eligibleTypes.includes(state.currentItem.type)) {
+  if (!state.currentItem || !AI_NOTES_TYPES.includes(state.currentItem.type)) {
     showToast('No active video or document loaded.');
     return;
   }
@@ -2306,7 +2362,7 @@ async function generateTranscriptAndSummaryAction() {
   
   if (!genBtn || !spinner) return;
   
-  const isVideo = state.currentItem.type === 'video';
+  const isVideo = isMediaItem(state.currentItem);
   
   // Check settings configuration first
   if (!state.aiConfig || !state.aiConfig.llmConfigured || (isVideo && !state.aiConfig.transcriptionConfigured)) {
@@ -2676,13 +2732,8 @@ function renderSummaryScopeSelector() {
   let count = 0;
 
   state.currentCourse.sections.forEach((sec, secIdx) => {
-    const eligibleItems = sec.items.filter(item => {
-      const ext = item.name.split('.').pop().toLowerCase();
-      return item.type === 'video' ||
-             (item.type === 'text' && (ext === 'md' || ext === 'txt')) ||
-             (item.type === 'html' && (ext === 'html' || ext === 'htm')) ||
-             (item.type === 'pdf' && ext === 'pdf');
-    });
+    // Matches the types the course summary job reads in server.js
+    const eligibleItems = sec.items.filter(item => ['video', 'audio', 'text', 'html', 'pdf', 'docx'].includes(item.type));
 
     if (eligibleItems.length === 0) return;
 
@@ -2708,7 +2759,7 @@ function renderSummaryScopeSelector() {
 
     eligibleItems.forEach((item, itemIdx) => {
       const rowId = `scope-item-cb-${secIdx}-${itemIdx}`;
-      const isVideo = item.type === 'video';
+      const isVideo = isMediaItem(item);
       const fileIconSvg = isVideo 
         ? `<svg class="scope-file-icon video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 14px; height: 14px; margin-right: 4px;"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`
         : `<svg class="scope-file-icon document" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 14px; height: 14px; margin-right: 4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
@@ -2933,7 +2984,7 @@ function renderChatMessages() {
   if (!messagesBody) return;
 
   if (state.chatHistory.length === 0) {
-    const isVideo = state.currentItem && state.currentItem.type === 'video';
+    const isVideo = isMediaItem(state.currentItem);
     messagesBody.innerHTML = isVideo
       ? '<p class="empty-pane-msg">Ask questions about this lecture\'s transcript. Start by typing a question below or selecting a suggestion.</p>'
       : '<p class="empty-pane-msg">Ask questions about this document\'s content. Start by typing a question below or selecting a suggestion.</p>';
@@ -2990,8 +3041,7 @@ function handleChatInputKeyDown(event) {
 }
 
 async function executeChatMessage(messageText) {
-  const eligibleTypes = ['video', 'html', 'text', 'code', 'pdf'];
-  if (!state.currentItem || !eligibleTypes.includes(state.currentItem.type)) {
+  if (!state.currentItem || !AI_NOTES_TYPES.includes(state.currentItem.type)) {
     showToast('No active video or document loaded.');
     return;
   }

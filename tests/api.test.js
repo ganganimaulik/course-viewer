@@ -2,11 +2,14 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { execFileSync, spawnSync } = require('child_process');
 
-// Load the server against a throwaway db.json, so these tests can add a watched folder and save progress
-// without touching the real one. server.js creates the file on load; stop here if it didn't.
+// Load the server against a throwaway db.json and cache, so these tests can add a watched folder and save
+// progress without touching the real ones. server.js creates the db file on load; stop here if it didn't.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'course-viewer-test-'));
+const cacheDir = path.join(tmpDir, 'cache');
 process.env.COURSE_VIEWER_DB = path.join(tmpDir, 'db.json');
+process.env.COURSE_VIEWER_CACHE = cacheDir;
 const { app } = require('../server');
 if (!fs.existsSync(process.env.COURSE_VIEWER_DB)) {
   throw new Error('server.js ignored COURSE_VIEWER_DB; refusing to run against the real db.json');
@@ -16,6 +19,11 @@ const libraryDir = path.join(tmpDir, 'library');
 const courseDir = path.join(libraryDir, 'Course A');
 const videoPath = path.join(courseDir, 'lesson.mp4');
 const pagePath = path.join(courseDir, 'page.html');
+const audioPath = path.join(courseDir, 'talk.mp3');
+const streamPath = path.join(courseDir, 'clip.ts');
+const typescriptPath = path.join(courseDir, 'types.ts');
+// Converting a transport stream needs ffmpeg and ffprobe; without them, that test is skipped
+const hasFfmpeg = ['ffmpeg', 'ffprobe'].every((tool) => spawnSync(tool, ['-version']).status === 0);
 const looseVideoPath = path.join(libraryDir, 'loose.mp4');
 const outsideFile = path.join(tmpDir, 'secret.txt');
 const size = 1000;
@@ -33,6 +41,17 @@ beforeAll(async () => {
   fs.mkdirSync(courseDir, { recursive: true });
   fs.writeFileSync(videoPath, Buffer.alloc(size, 7));
   fs.writeFileSync(pagePath, '<p>Lesson</p><script>fetch("/api/progress/reset", { method: "POST" })</script>');
+  fs.writeFileSync(audioPath, Buffer.alloc(size, 7));
+  fs.writeFileSync(typescriptPath, 'export const answer: number = 42;\n');
+  if (hasFfmpeg) {
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x48:rate=5',
+      '-f', 'lavfi', '-i', 'sine=duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-f', 'mpegts', streamPath]);
+  } else {
+    // Enough of a transport stream (sync bytes every 188 bytes) to be recognised as one
+    const packets = Buffer.alloc(188 * 3, 0xff);
+    for (let i = 0; i < packets.length; i += 188) packets[i] = 0x47;
+    fs.writeFileSync(streamPath, packets);
+  }
   fs.writeFileSync(looseVideoPath, Buffer.alloc(10, 7));
   fs.writeFileSync(outsideFile, 'not for the API');
   await new Promise((resolve) => {
@@ -113,6 +132,52 @@ describe('file serving', () => {
     const res = await postJson('/api/video/pregenerate-summaries', { paths });
     expect(res.status).toBe(200);
     expect((await res.json()).queuedCount).toBe(0);
+  });
+});
+
+describe('lesson types', () => {
+  const courseItems = async () => {
+    const courses = await (await fetch(`${baseUrl}/api/courses`)).json();
+    const items = courses.find((c) => c.path === courseDir).sections.flatMap((s) => s.items);
+    return Object.fromEntries(items.map((item) => [item.name, item]));
+  };
+
+  it('tells transport stream videos apart from TypeScript, and lists audio as lessons', async () => {
+    const items = await courseItems();
+    expect(items['talk.mp3'].type).toBe('audio');
+    expect(items['clip.ts']).toMatchObject({ type: 'video', remux: true });
+    expect(items['types.ts'].type).toBe('code');
+  });
+
+  it('streams audio with its own content type', async () => {
+    const res = await fetch(`${baseUrl}/api/video?path=${encodeURIComponent(audioPath)}`, { headers: { Range: 'bytes=0-9' } });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-type')).toBe('audio/mpeg');
+    expect((await res.arrayBuffer()).byteLength).toBe(10);
+  });
+
+  (hasFfmpeg ? it : it.skip)('plays a transport stream from an MP4 copy that is made once', async () => {
+    const url = `${baseUrl}/api/video?path=${encodeURIComponent(streamPath)}`;
+    const first = await fetch(url, { headers: { Range: 'bytes=0-' } });
+    expect(first.status).toBe(206);
+    expect(first.headers.get('content-type')).toBe('video/mp4');
+    expect(Buffer.from(await first.arrayBuffer()).subarray(4, 8).toString()).toBe('ftyp');
+
+    const again = await fetch(url, { headers: { Range: 'bytes=0-99' } });
+    expect(again.status).toBe(206);
+    await again.arrayBuffer();
+    const copies = fs.readdirSync(path.join(cacheDir, 'playable')).filter((name) => name.endsWith('.mp4'));
+    expect(copies).toHaveLength(1);
+  });
+
+  it('refuses to stream files that are not audio or video', async () => {
+    const res = await fetch(`${baseUrl}/api/video?path=${encodeURIComponent(typescriptPath)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('converts only Word documents through the docx endpoint', async () => {
+    const res = await fetch(`${baseUrl}/api/docx?path=${encodeURIComponent(audioPath)}`);
+    expect(res.status).toBe(403);
   });
 });
 

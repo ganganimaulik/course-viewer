@@ -5,8 +5,10 @@ A local web application designed to help you organize, play, and track learning 
 ## Features
 - **Auto-scan Directories**: Recursively scans configured folders on your Mac (e.g. `~/Downloads/courses`, `~/Downloads/Mega Downloads`) to build a course catalog.
 - **Support for Multiple Media Formats**:
-  - Custom HTML5 Video player with subtitle overlay support (translates `.srt` on the fly).
+  - Custom HTML5 Video player with subtitle overlay support (translates `.srt` on the fly). Audio lessons (`.mp3`, `.m4a`, `.ogg`, etc.) play in the same player.
+  - `.ts` videos (MPEG transport streams, e.g. HLS downloads) are copied into an MP4 with ffmpeg the first time they play. The copies live in `~/Library/Caches/course-viewer` and the least recently watched are deleted past 4 GB.
   - Inline PDF Document Viewer.
+  - Word documents (`.docx`) shown as readable pages.
   - Interactive HTML Article iframe container.
   - Text & Markdown viewer.
 - **Progress Tracking**:
@@ -36,7 +38,8 @@ A local web application designed to help you organize, play, and track learning 
 
 ### Prerequisites
 - [Node.js](https://nodejs.org) (v22 or higher)
-- For AI notes: [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg`) and the Modal CLI (`pip install modal`)
+- [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg`) to play `.ts` videos and transcribe lectures
+- For AI notes: the Modal CLI (`pip install modal`)
 
 ### Setup
 1. Clone the repository or download the source files.
