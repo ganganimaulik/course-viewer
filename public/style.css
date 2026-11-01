@@ -1453,6 +1453,7 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
+  isolation: isolate; /* Keeps the player's overlays and menus under the expanded AI sidebar */
 }
 
 /* Blank State */
@@ -2408,7 +2409,9 @@ h1 {
 }
 
 .video-extra-sidebar {
-  width: 380px;
+  position: relative;
+  width: var(--ai-sidebar-width, 380px); /* Set on the row by dragging the handle (startPanelResize in app.js) */
+  max-width: max(360px, calc(100% - 360px)); /* Leaves the viewer 360px (RESIZABLE_PANELS in app.js) */
   flex-shrink: 0;
   background: var(--bg-sidebar);
   border-left: 1px solid var(--border-color);
@@ -2421,6 +2424,35 @@ h1 {
 
 .video-extra-sidebar.collapsed {
   width: 0;
+  border-left-color: transparent;
+}
+
+/* Inside the sidebar's left edge, since the sidebar clips its contents to collapse */
+.video-extra-sidebar > .panel-resizer {
+  left: 0;
+  width: 8px;
+}
+
+body.resizing-panel .video-extra-sidebar {
+  transition: none;
+}
+
+/* Expanded, the open sidebar covers the viewer. The row keeps the sidebar's width as padding, so the viewer
+   underneath keeps its size: a PDF keeps its zoom and a lesson page its reading position. */
+.workspace-main-content-row {
+  position: relative;
+}
+
+.workspace-main-content-row:has(> .video-extra-sidebar.expanded:not(.collapsed)) {
+  padding-right: min(var(--ai-sidebar-width, 380px), max(360px, calc(100% - 360px)));
+}
+
+.video-extra-sidebar.expanded:not(.collapsed) {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: auto;
+  max-width: none;
   border-left-color: transparent;
 }
 
@@ -3126,6 +3158,117 @@ code[class*="language-"] {
 @keyframes typingBounce {
   0%, 80%, 100% { transform: scale(0); }
   40% { transform: scale(1); }
+}
+
+/* --- RESIZABLE SIDE PANELS (course chat and lesson AI sidebar; startPanelResize in app.js) --- */
+/* Drag handle on a panel's left edge, with a grip in the middle */
+.panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.panel-resizer::before {
+  content: '';
+  width: 4px;
+  height: 40px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.15);
+  transition: height 0.2s, background 0.2s;
+}
+
+.panel-resizer:hover::before,
+.panel-resizer.dragging::before {
+  height: 72px;
+  background: var(--color-primary);
+}
+
+body.resizing-panel {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Expand buttons show the icon for what a click does */
+.expand-toggle-btn .icon-restore,
+.expand-toggle-btn.expanded .icon-expand {
+  display: none;
+}
+
+.expand-toggle-btn.expanded .icon-restore {
+  display: block;
+}
+
+/* A wide panel keeps its text in a centered 880px column, so long answers, transcripts and notes stay readable */
+.course-chat-panel .chat-messages,
+.video-extra-sidebar .chat-messages,
+.video-extra-sidebar .pane-text-body {
+  padding-left: max(20px, calc((100% - 880px) / 2));
+  padding-right: max(20px, calc((100% - 880px) / 2));
+}
+
+.course-chat-panel .chat-suggestions,
+.course-chat-panel .chat-input-wrapper,
+.video-extra-sidebar .chat-suggestions,
+.video-extra-sidebar .chat-input-wrapper,
+.video-extra-sidebar .pane-action-row {
+  padding-left: max(16px, calc((100% - 880px) / 2));
+  padding-right: max(16px, calc((100% - 880px) / 2));
+}
+
+/* --- COURSE AI ASSISTANT PANEL (course summary page) --- */
+/* Shown by .chat-open on .course-summary-layout, which holds its dragged width (--course-chat-width);
+   .chat-expanded hides the summary and gives the chat the row. */
+.course-chat-panel {
+  display: none;
+  position: relative;
+  flex-direction: column;
+  width: var(--course-chat-width, 420px);
+  min-width: 320px;
+  max-width: calc(100% - 324px); /* The 24px gap and the summary's 300px minimum (RESIZABLE_PANELS in app.js) */
+  height: 100%;
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* The handle fills the 24px gap left of the chat */
+.course-chat-panel > .panel-resizer {
+  left: -24px;
+  width: 24px;
+}
+
+.course-summary-layout.chat-open > .course-chat-panel {
+  display: flex;
+}
+
+/* Beside the chat the summary fills the rest of the row, so the handle stays under the pointer while dragging */
+.course-summary-layout.chat-open > .course-summary-panel {
+  max-width: none;
+}
+
+.course-summary-layout.chat-open.chat-expanded > .course-summary-panel {
+  display: none;
+}
+
+.course-summary-layout.chat-open.chat-expanded > .course-chat-panel {
+  flex: 1;
+  max-width: none;
+}
+
+.course-chat-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  border-radius: 16px;
+  box-shadow: var(--shadow-main);
+  overflow: hidden;
 }
 
 

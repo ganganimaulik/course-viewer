@@ -91,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initKeyboardShortcuts();
   initStudyTime();
   initHeatmapTooltip();
+  initPanelSizes();
 
   // Intercept clicks on timestamp links
   document.addEventListener('click', (e) => {
@@ -1280,8 +1281,8 @@ function openCourse(courseId, restoreItemPath = null, tab = 'lessons') {
     state.courseChatHistory = [];
     renderCourseChatMessages(); // Clear the previous course's conversation from the panel
 
-    const chatPanel = document.getElementById('course-chat-panel');
-    if (chatPanel) chatPanel.style.display = 'none';
+    const summaryLayout = document.getElementById('course-summary-layout');
+    if (summaryLayout && summaryLayout.classList.contains('chat-open')) toggleCourseChat(); // Closes the chat panel
     const toggleBtn = document.getElementById('btn-toggle-course-chat');
     if (toggleBtn) toggleBtn.style.display = 'none';
   }
@@ -3162,6 +3163,87 @@ function toggleSidebar() {
   state.sidebarAutoCollapsed = false;
 }
 
+// --- RESIZABLE SIDE PANELS (COURSE CHAT & LESSON AI SIDEBAR) ---
+// Dragging the handle on a panel's left edge sets its width, a CSS variable on the row holding it. The content
+// beside the panel keeps besideMinWidth (also in the panel's max-width in style.css); dragging the panel over
+// half of that expands it over the content, and dragging back undoes it. Sizes are saved under the panel's key.
+const RESIZABLE_PANELS = {
+  'course-chat': {
+    rowId: 'course-summary-layout',
+    panelId: 'course-chat-panel',
+    widthVar: '--course-chat-width',
+    minWidth: 320,
+    besideMinWidth: 300, // Fits the course summary's buttons
+    setExpanded: setCourseChatExpanded
+  },
+  'video-extra-sidebar': {
+    rowId: 'workspace-main-content-row',
+    panelId: 'video-extra-sidebar',
+    widthVar: '--ai-sidebar-width',
+    minWidth: 360, // Fits its tabs and buttons
+    besideMinWidth: 360, // The lesson viewer
+    setExpanded: setAiSidebarExpanded
+  }
+};
+
+function initPanelSizes() {
+  Object.entries(RESIZABLE_PANELS).forEach(([key, panel]) => {
+    const width = parseInt(localStorage.getItem(`${key}-width`), 10);
+    if (width) document.getElementById(panel.rowId).style.setProperty(panel.widthVar, `${width}px`);
+  });
+  // The lesson sidebar only covers the viewer while it's open; the course chat expands when opened (toggleCourseChat)
+  setAiSidebarExpanded(localStorage.getItem('video-extra-sidebar-expanded') === 'true');
+}
+
+function startPanelResize(event, key) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+
+  const panel = RESIZABLE_PANELS[key];
+  const handle = event.currentTarget;
+  const row = document.getElementById(panel.rowId);
+  const startX = event.clientX;
+  const startWidth = document.getElementById(panel.panelId).getBoundingClientRect().width;
+  const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+  const maxWidth = Math.max(panel.minWidth, row.clientWidth - gap - panel.besideMinWidth);
+  let width = null;
+  let expanded = null;
+
+  // Capturing the pointer keeps the drag going over other elements, lesson frames and outside the window
+  handle.setPointerCapture(event.pointerId);
+  handle.classList.add('dragging');
+  document.body.classList.add('resizing-panel');
+
+  const onMove = (e) => {
+    const wanted = startWidth + startX - e.clientX; // The handle is on the panel's left edge
+    expanded = wanted > maxWidth + panel.besideMinWidth / 2;
+    panel.setExpanded(expanded);
+    if (!expanded) {
+      width = Math.round(Math.min(Math.max(wanted, panel.minWidth), maxWidth));
+      row.style.setProperty(panel.widthVar, `${width}px`);
+    }
+  };
+  const onEnd = () => {
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('lostpointercapture', onEnd);
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing-panel');
+    if (width !== null) localStorage.setItem(`${key}-width`, String(width));
+    if (expanded !== null) localStorage.setItem(`${key}-expanded`, String(expanded));
+  };
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('lostpointercapture', onEnd);
+}
+
+// Double-clicking a panel's handle puts it back to its default size
+function resetPanelSize(key) {
+  const panel = RESIZABLE_PANELS[key];
+  document.getElementById(panel.rowId).style.removeProperty(panel.widthVar);
+  panel.setExpanded(false);
+  localStorage.removeItem(`${key}-width`);
+  localStorage.removeItem(`${key}-expanded`);
+}
+
 // --- VIDEO PLAYER EXTRA SIDEBAR LOGIC (TRANSCRIPT & AI SUMMARY) ---
 
 function toggleExtraSidebar() {
@@ -3171,6 +3253,23 @@ function toggleExtraSidebar() {
   sidebar.classList.toggle('collapsed');
   const collapsed = sidebar.classList.contains('collapsed');
   localStorage.setItem('video-extra-sidebar-collapsed', collapsed ? 'true' : 'false');
+}
+
+// Expanding the sidebar covers the lesson viewer while the sidebar is open (its width is dragged, see RESIZABLE_PANELS)
+function setAiSidebarExpanded(expanded) {
+  const sidebar = document.getElementById('video-extra-sidebar');
+  if (sidebar.classList.contains('expanded') === expanded) return;
+  sidebar.classList.toggle('expanded', expanded);
+
+  const btn = document.getElementById('btn-expand-ai-sidebar');
+  btn.classList.toggle('expanded', expanded);
+  btn.title = expanded ? 'Restore Panel Size' : 'Expand Panel';
+}
+
+function toggleAiSidebarExpanded() {
+  const expanded = !document.getElementById('video-extra-sidebar').classList.contains('expanded');
+  setAiSidebarExpanded(expanded);
+  localStorage.setItem('video-extra-sidebar-expanded', String(expanded));
 }
 
 function switchVideoExtraTab(tabName) {
@@ -4205,17 +4304,39 @@ window.renderChatMessages = renderChatMessages;
 
 // --- COURSE-WIDE CHAT FRONTEND LOGIC ---
 function toggleCourseChat() {
-  const panel = document.getElementById('course-chat-panel');
-  if (!panel) return;
-  
-  if (panel.style.display === 'none' || !panel.style.display) {
-    panel.style.display = 'flex';
+  const layout = document.getElementById('course-summary-layout');
+  if (!layout) return;
+
+  if (layout.classList.toggle('chat-open')) {
+    setCourseChatExpanded(localStorage.getItem('course-chat-expanded') === 'true'); // Opens the size it was left at
     // Scroll messages to bottom when opening
     const messagesBody = document.getElementById('course-chat-messages-body');
     if (messagesBody) messagesBody.scrollTop = messagesBody.scrollHeight;
   } else {
-    panel.style.display = 'none';
+    setCourseChatExpanded(false); // Brings the summary back
   }
+}
+
+// Expanding the chat hides the summary so the chat fills the row (its width is dragged, see RESIZABLE_PANELS)
+function setCourseChatExpanded(expanded) {
+  const layout = document.getElementById('course-summary-layout');
+  if (layout.classList.contains('chat-expanded') === expanded) return;
+
+  // Hiding the summary resets its scroll position, so it's put back when the summary shows again
+  const summary = layout.querySelector('.course-summary-panel');
+  if (expanded) layout.dataset.summaryScroll = summary.scrollTop;
+  layout.classList.toggle('chat-expanded', expanded);
+  if (!expanded) summary.scrollTop = Number(layout.dataset.summaryScroll) || 0;
+
+  const btn = document.getElementById('btn-expand-course-chat');
+  btn.classList.toggle('expanded', expanded);
+  btn.title = expanded ? 'Restore Chat Size' : 'Expand Chat';
+}
+
+function toggleCourseChatExpanded() {
+  const expanded = !document.getElementById('course-summary-layout').classList.contains('chat-expanded');
+  setCourseChatExpanded(expanded);
+  localStorage.setItem('course-chat-expanded', String(expanded));
 }
 
 function renderCourseChatMessages() {
@@ -4328,6 +4449,7 @@ async function executeCourseChatMessage(messageText) {
 
 // Bind to window for HTML accessibility
 window.toggleCourseChat = toggleCourseChat;
+window.toggleCourseChatExpanded = toggleCourseChatExpanded;
 window.sendCourseQuickQuestion = sendCourseQuickQuestion;
 window.handleCourseChatInputKeyDown = handleCourseChatInputKeyDown;
 window.sendCourseChatMessage = sendCourseChatMessage;

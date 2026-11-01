@@ -328,7 +328,7 @@
             </header>
 
             <!-- Playback / Display Workspace Containers (wrapped in main content row) -->
-            <div class="workspace-main-content-row" style="display: flex; flex-direction: row; flex-grow: 1; overflow: hidden; width: 100%;">
+            <div class="workspace-main-content-row" id="workspace-main-content-row" style="display: flex; flex-direction: row; flex-grow: 1; overflow: hidden; width: 100%;">
               <div class="viewer-container" id="viewer-container" style="flex: 1; position: relative;">
                 
                 <!-- Blank State -->
@@ -514,10 +514,10 @@
 
                 <!-- Course Summary Viewer Container -->
                 <div class="viewer-text" id="viewer-course-summary-container" style="display:none; overflow-y: hidden; padding: 24px; height: 100%; width: 100%; box-sizing: border-box; justify-content: center;">
-                  <div style="display: flex; gap: 24px; width: 100%; max-width: 1400px; height: 100%; align-items: stretch; justify-content: center; box-sizing: border-box;">
+                  <div class="course-summary-layout" id="course-summary-layout" style="display: flex; gap: 24px; width: 100%; max-width: 1400px; height: 100%; align-items: stretch; justify-content: center; box-sizing: border-box;">
                     
                     <!-- Left Panel: Summary Details -->
-                    <div class="text-content-card markdown-body" style="flex: 1; padding: 40px; border: 1px solid var(--border-color); background: var(--bg-panel); border-radius: 16px; box-shadow: var(--shadow-main); box-sizing: border-box; overflow-y: auto; height: 100%;">
+                    <div class="text-content-card markdown-body course-summary-panel" style="flex: 1; padding: 40px; border: 1px solid var(--border-color); background: var(--bg-panel); border-radius: 16px; box-shadow: var(--shadow-main); box-sizing: border-box; overflow-y: auto; height: 100%;">
                       <!-- Title and Action Header -->
                       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 20px; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; width: 100%; box-sizing: border-box;">
                         <div style="display: flex; align-items: center; gap: 12px;">
@@ -574,34 +574,43 @@
                       </div>
                     </div>
 
-                    <!-- Right Panel: Course AI Chat -->
-                    <div id="course-chat-panel" style="width: 420px; display: none; border: 1px solid var(--border-color); background: var(--bg-panel); border-radius: 16px; box-shadow: var(--shadow-main); box-sizing: border-box; flex-direction: column; height: 100%; overflow: hidden; animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;">
-                      <div style="display: flex; border-bottom: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.15); padding: 12px 16px; align-items: center; justify-content: space-between; flex-shrink: 0; height: 56px;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                          <div style="width: 8px; height: 8px; background: var(--color-secondary); border-radius: 50%; box-shadow: 0 0 8px var(--color-secondary);"></div>
-                          <span style="font-family: var(--font-family-headings); font-size: 14px; font-weight: 700; color: var(--text-main);">Course AI Assistant</span>
-                        </div>
-                        <button class="sidebar-close-btn" onclick="toggleCourseChat()" title="Close Chat" style="margin-left: auto;">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                        </button>
-                      </div>
-                      
-                      <div class="chat-container" style="flex-grow: 1; height: calc(100% - 56px);">
-                        <div class="chat-messages" id="course-chat-messages-body">
-                          <p class="empty-pane-msg">Ask any question about the entire course content, summaries, or cross-topic relationships.</p>
-                        </div>
-                        
-                        <div class="chat-suggestions" id="course-chat-suggestions-list">
-                          <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Provide a high-level course overview.')">Provide course overview</button>
-                          <button class="suggestion-tag" onclick="sendCourseQuickQuestion('What are the key technical concepts or terminology introduced?')">List key technical concepts</button>
-                          <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Synthesize a list of study review questions for this course.')">Generate a review sheet</button>
+                    <!-- Right Panel: Course AI Chat (shown by .chat-open on the layout). Drag the handle in the gap to resize it; expanding hides the summary -->
+                    <div id="course-chat-panel" class="course-chat-panel">
+                      <div class="panel-resizer" title="Drag to resize, double-click to reset" onpointerdown="startPanelResize(event, 'course-chat')" ondblclick="resetPanelSize('course-chat')"></div>
+                      <div class="course-chat-card">
+                        <div style="display: flex; border-bottom: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.15); padding: 12px 16px; align-items: center; justify-content: space-between; flex-shrink: 0; height: 56px;">
+                          <div style="display: flex; align-items: center; gap: 8px;">
+                            <div style="width: 8px; height: 8px; background: var(--color-secondary); border-radius: 50%; box-shadow: 0 0 8px var(--color-secondary);"></div>
+                            <span style="font-family: var(--font-family-headings); font-size: 14px; font-weight: 700; color: var(--text-main);">Course AI Assistant</span>
+                          </div>
+                          <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
+                            <button class="sidebar-close-btn expand-toggle-btn" id="btn-expand-course-chat" onclick="toggleCourseChatExpanded()" title="Expand Chat">
+                              <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                              <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                            </button>
+                            <button class="sidebar-close-btn" onclick="toggleCourseChat()" title="Close Chat">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                            </button>
+                          </div>
                         </div>
 
-                        <div class="chat-input-wrapper">
-                          <textarea id="course-chat-user-input" class="chat-input" placeholder="Ask a question about this course..." rows="1" onkeydown="handleCourseChatInputKeyDown(event)"></textarea>
-                          <button class="primary-btn chat-send-btn" id="btn-course-chat-send" onclick="sendCourseChatMessage()" title="Send question">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px; height:16px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                          </button>
+                        <div class="chat-container" style="flex-grow: 1; height: calc(100% - 56px);">
+                          <div class="chat-messages" id="course-chat-messages-body">
+                            <p class="empty-pane-msg">Ask any question about the entire course content, summaries, or cross-topic relationships.</p>
+                          </div>
+
+                          <div class="chat-suggestions" id="course-chat-suggestions-list">
+                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Provide a high-level course overview.')">Provide course overview</button>
+                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('What are the key technical concepts or terminology introduced?')">List key technical concepts</button>
+                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Synthesize a list of study review questions for this course.')">Generate a review sheet</button>
+                          </div>
+
+                          <div class="chat-input-wrapper">
+                            <textarea id="course-chat-user-input" class="chat-input" placeholder="Ask a question about this course..." rows="1" onkeydown="handleCourseChatInputKeyDown(event)"></textarea>
+                            <button class="primary-btn chat-send-btn" id="btn-course-chat-send" onclick="sendCourseChatMessage()" title="Send question">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px; height:16px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -611,15 +620,22 @@
 
               </div> <!-- closes #viewer-container -->
 
-              <!-- AI Transcript & Summary Sidebar (Right Panel, Collapsed by default, shared between viewers) -->
+              <!-- AI Transcript & Summary Sidebar (Right Panel, Collapsed by default, shared between viewers). Drag its left edge to resize it; expanding covers the viewer -->
               <div class="video-extra-sidebar collapsed" id="video-extra-sidebar">
+                <div class="panel-resizer" title="Drag to resize, double-click to reset" onpointerdown="startPanelResize(event, 'video-extra-sidebar')" ondblclick="resetPanelSize('video-extra-sidebar')"></div>
                 <div class="sidebar-tabs">
                   <button class="sidebar-tab active" id="btn-tab-transcript" onclick="switchVideoExtraTab('transcript')">Transcript</button>
                   <button class="sidebar-tab" id="btn-tab-summary" onclick="switchVideoExtraTab('summary')">AI Summary</button>
                   <button class="sidebar-tab" id="btn-tab-chat" onclick="switchVideoExtraTab('chat')">Ask AI</button>
-                  <button class="sidebar-close-btn" onclick="toggleExtraSidebar()" title="Collapse Panel">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                  </button>
+                  <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
+                    <button class="sidebar-close-btn expand-toggle-btn" id="btn-expand-ai-sidebar" onclick="toggleAiSidebarExpanded()" title="Expand Panel">
+                      <svg class="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                      <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                    </button>
+                    <button class="sidebar-close-btn" onclick="toggleExtraSidebar()" title="Collapse Panel">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
+                  </div>
                 </div>
                 <div class="sidebar-content">
                   <div class="sidebar-pane active" id="pane-transcript">
