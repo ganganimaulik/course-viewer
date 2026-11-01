@@ -97,6 +97,7 @@ The Express app exposes the following APIs:
 - Ensure all file paths are handled safely using Node's `path` library.
 - Safely escape shells in `exec` calls. Avoid shell injection vulnerabilities.
 - The server listens on `127.0.0.1` only, sends no CORS headers, and rejects non-local `Host` headers and cross-site writes. Any endpoint that takes a file or course path must check it with `isInWatchedFolder()`.
+- `/api/file` serves lesson HTML with `Content-Security-Policy: script-src 'none'; form-action 'none'`. Those pages load on the app's own origin, so their scripts or forms could otherwise call the API. Embedded players such as Vimeo iframes are unaffected.
 - For all writing/updating of progress, ensure `saveDb()` is called afterwards.
 - Preserve any existing comments/logic in `server.js`.
 
@@ -104,6 +105,7 @@ The Express app exposes the following APIs:
 - **Single Page App Architecture**: Do not introduce custom frontend routing libraries. Keep routing inside `switchView(viewId)` in `app.js`.
 - **Vanilla CSS**: Follow the modern glassmorphic styling conventions defined in `public/style.css`. Utilize CSS variables (e.g. `--bg-glass`, `--primary`, `--accent`) for theme consistency. Avoid Tailwind CSS unless specifically requested.
 - **No Placeholders**: Do not insert broken elements or dummy mock assets. Keep UI interactions complete.
+- **Untrusted Content**: Render Markdown (course files, AI notes, chat replies) only through `parseMarkdown()`, which sanitizes it with DOMPurify. Put other course text, such as file names, into the page with `textContent` or `escapeHtml()`, never raw `innerHTML`.
 
 ---
 

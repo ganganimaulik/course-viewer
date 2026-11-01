@@ -15,6 +15,7 @@ if (!fs.existsSync(process.env.COURSE_VIEWER_DB)) {
 const libraryDir = path.join(tmpDir, 'library');
 const courseDir = path.join(libraryDir, 'Course A');
 const videoPath = path.join(courseDir, 'lesson.mp4');
+const pagePath = path.join(courseDir, 'page.html');
 const looseVideoPath = path.join(libraryDir, 'loose.mp4');
 const outsideFile = path.join(tmpDir, 'secret.txt');
 const size = 1000;
@@ -31,6 +32,7 @@ const postJson = (route, body, headers = {}) => fetch(`${baseUrl}${route}`, {
 beforeAll(async () => {
   fs.mkdirSync(courseDir, { recursive: true });
   fs.writeFileSync(videoPath, Buffer.alloc(size, 7));
+  fs.writeFileSync(pagePath, '<p>Lesson</p><script>fetch("/api/progress/reset", { method: "POST" })</script>');
   fs.writeFileSync(looseVideoPath, Buffer.alloc(10, 7));
   fs.writeFileSync(outsideFile, 'not for the API');
   await new Promise((resolve) => {
@@ -97,6 +99,13 @@ describe('file serving', () => {
       const res = await fetch(`${baseUrl}/api/file?path=${encodeURIComponent(filePath)}`);
       expect(res.status).toBe(403);
     }
+  });
+
+  it('serves lesson pages with a policy that blocks their scripts and form posts', async () => {
+    const res = await fetch(`${baseUrl}/api/file?path=${encodeURIComponent(pagePath)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(res.headers.get('content-security-policy')).toBe("script-src 'none'; form-action 'none'");
   });
 
   it('accepts JSON bodies over 100kb, like the file list of a large course', async () => {

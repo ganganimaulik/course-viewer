@@ -2456,6 +2456,9 @@ function getCalloutLabel(type) {
   }
 }
 
+// DOMPurify's default link allowlist, plus the timestamp: links that AI notes use to seek within lessons
+const MARKDOWN_ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|timestamp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+
 function parseMarkdown(md) {
   if (!md) return '';
 
@@ -2496,7 +2499,9 @@ function parseMarkdown(md) {
       try {
         renderedMath = katex.renderToString(math, {
           displayMode: displayMode,
-          throwOnError: false
+          throwOnError: false,
+          // HTML only: the sanitizer below strips MathML's <semantics> and <annotation> tags
+          output: 'html'
         });
       } catch (err) {
         console.error('KaTeX rendering error:', err);
@@ -2509,7 +2514,16 @@ function parseMarkdown(md) {
     html = html.split(placeholder).join(renderedMath);
   });
 
-  return html;
+  // Course files and AI replies can both carry HTML such as <img onerror=...>, which would run as the app.
+  // Without the sanitizer, show the source as plain text rather than unchecked HTML.
+  if (typeof DOMPurify === 'undefined') {
+    return `<p>${escapeHtml(md).replace(/\n/g, '<br>')}</p>`;
+  }
+  return DOMPurify.sanitize(html, {
+    ALLOWED_URI_REGEXP: MARKDOWN_ALLOWED_URI,
+    // A form would still post to the API (e.g. reset all progress) once its button is clicked
+    FORBID_TAGS: ['form']
+  });
 }
 
 function fallbackParseMarkdown(md) {

@@ -693,6 +693,10 @@ app.get('/api/file', (req, res) => {
     contentType = 'application/pdf';
   } else if (ext === '.html' || ext === '.htm') {
     contentType = 'text/html';
+    // Downloaded pages load on the app's own origin, where a script could call the API like the app does
+    // (e.g. watch the home folder, then read files from it). Block their scripts and form posts; embedded
+    // players such as Vimeo run in their own frames, which this policy doesn't reach.
+    res.setHeader('Content-Security-Policy', "script-src 'none'; form-action 'none'");
   } else if (textExtensions.includes(ext)) {
     contentType = 'text/plain';
   } else if (ext === '.png') {
