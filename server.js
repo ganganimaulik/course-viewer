@@ -2211,6 +2211,422 @@ ${transcript}
   }
 });
 
+// --- SEARCH ---
+// Lesson names, transcripts, AI notes and lesson-page text, split into chunks of a few hundred characters and
+// searched with a plain scan: a library's text fits in memory, and no inverted index keeps it small. Text from
+// lesson pages is cached on disk, since reading every saved page the first time is slow.
+const PAGE_TEXT_FILE = path.join(CACHE_DIR, 'page-text.json');
+const SEARCH_REFRESH_MS = 2 * 60 * 1000;
+const SEARCH_KINDS = ['title', 'transcript', 'notes', 'page', 'course-notes'];
+// Matches in a lesson's name count for more; its notes condense the lesson
+const KIND_WEIGHTS = { title: 2.5, notes: 1.2, 'course-notes': 1.1, transcript: 1, page: 1 };
+const STOPWORDS = new Set(('a an and are as at be but by can could do does for from give has have how i if in into is it its ' +
+  'me my no not of on or our so than that the their them then there these they this to us was we what when where which ' +
+  'who why will with would you your').split(' '));
+// index: { chunks, totalLength } (the first build is searchable while it fills in); builtAt: when it finished
+const search = { index: { chunks: [], totalLength: 0 }, builtAt: 0, building: null, progress: null };
+let pageTextCache = null; // { [path]: { size, mtimeMs, text } }
+let pageTextChanged = false;
+
+function readTextIfExists(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    return '';
+  }
+}
+
+// Split text into chunks of about `size` characters, at line breaks or, inside long paragraphs, sentence ends
+function splitIntoChunks(text, size = 700) {
+  const chunks = [];
+  let current = '';
+  const add = (piece) => {
+    if (current && current.length + piece.length > size) {
+      chunks.push(current.trim());
+      current = '';
+    }
+    current += `${piece} `;
+  };
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.length > size) {
+      (trimmed.match(/[^.!?]+[.!?]*/g) || [trimmed]).forEach(add);
+    } else {
+      add(trimmed);
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
+
+// Lecture transcripts: a chunk per [MM:SS] paragraph, starting at its time. Short ones (subtitle cues) are
+// merged, and marks ([offset in the text, seconds]) keep each one's time, so results open where they matched.
+function chunkTimedTranscript(text) {
+  const stamps = [...text.matchAll(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g)];
+  if (stamps.length === 0) {
+    return splitIntoChunks(text).map((chunkText) => ({ text: chunkText, start: null }));
+  }
+  const chunks = [];
+  let current = null;
+  stamps.forEach((match, i) => {
+    const end = i + 1 < stamps.length ? stamps[i + 1].index : text.length;
+    const segment = text.slice(match.index + match[0].length, end).replace(/\s+/g, ' ').trim();
+    if (!segment) return;
+    const seconds = timestampToSeconds(match[1]);
+    if (!current || current.text.length > 200) {
+      if (current) chunks.push(current);
+      current = { text: segment, start: seconds, marks: [[0, seconds]] };
+    } else {
+      current.marks.push([current.text.length + 1, seconds]);
+      current.text += ` ${segment}`;
+    }
+  });
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+// When a result's chunk merged several transcript paragraphs, the time of the one holding the first match
+function startOfMatch(chunk, { terms, phrases }) {
+  const positions = [...phrases, ...terms].map((needle) => chunk.lower.indexOf(needle)).filter((i) => i >= 0);
+  if (!chunk.marks || positions.length === 0) return chunk.start;
+  const first = Math.min(...positions);
+  let start = chunk.start;
+  for (const [offset, seconds] of chunk.marks) {
+    if (offset > first) break;
+    start = seconds;
+  }
+  return start;
+}
+
+function markdownToPlainText(markdown) {
+  return markdown
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // Links become their text
+    .replace(/^\s*(?:[-+*]|\d+\.)\s+/gm, '')
+    .replace(/[*_`>#|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// AI notes: small chunks at headings and list items; a chunk's time is its first timestamp link
+function chunkNotes(markdown) {
+  const blocks = markdown.split(/\n(?=\s*(?:[-*]\s|#{1,6}\s|\d+\.\s))|\n\s*\n/);
+  const chunks = [];
+  let current = '';
+  const flush = () => {
+    const text = markdownToPlainText(current);
+    if (text) {
+      const link = current.match(/\(timestamp:[^)#]*#(\d+(?:\.\d+)?)\)/);
+      const stamp = current.match(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/);
+      chunks.push({ text, start: link ? parseFloat(link[1]) : stamp ? timestampToSeconds(stamp[1]) : null });
+    }
+    current = '';
+  };
+  for (const block of blocks) {
+    if (current && current.length + block.length > 400) flush();
+    current += `${block}\n`;
+  }
+  flush();
+  return chunks;
+}
+
+// Visible text of a saved lesson page (cached by size and modification time)
+function getPageText(filePath, stat) {
+  const cached = pageTextCache[filePath];
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    return cached.text;
+  }
+  const html = fs.readFileSync(filePath, 'utf8');
+  const body = (html.match(/<body[^>]*>([\s\S]*)<\/body>/i) || [null, html])[1];
+  const text = cleanHtmlText(body.replace(/<(svg|noscript|nav|footer)\b[\s\S]*?<\/\1>/gi, ' '))
+    .replace(/&#(\d+);/g, (match, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (match, code) => String.fromCodePoint(parseInt(code, 16)));
+  pageTextCache[filePath] = { size: stat.size, mtimeMs: stat.mtimeMs, text };
+  pageTextChanged = true;
+  return text;
+}
+
+// marks: see chunkTimedTranscript (its text is already normalized, so their offsets still hold)
+function makeChunk(course, item, kind, text, start, marks) {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return {
+    marks: isMediaType(item && item.type) ? marks : undefined,
+    courseId: course.id,
+    courseTitle: course.title,
+    filePath: item ? item.path : null,
+    itemName: item ? item.name : null,
+    itemType: item ? item.type : null,
+    sectionName: item ? item.sectionName : null,
+    kind,
+    start: isMediaType(item && item.type) ? start : null,
+    text: clean,
+    lower: clean.toLowerCase(),
+    length: clean.split(' ').length
+  };
+}
+
+async function buildSearchIndex() {
+  if (!pageTextCache) {
+    try {
+      pageTextCache = JSON.parse(fs.readFileSync(PAGE_TEXT_FILE, 'utf8'));
+    } catch (err) {
+      pageTextCache = {};
+    }
+  }
+  const next = { chunks: [], totalLength: 0 };
+  if (!search.builtAt) search.index = next; // Nothing to search yet, so let results appear as it fills in
+  const add = (chunk) => {
+    if (!chunk.text) return;
+    next.chunks.push(chunk);
+    next.totalLength += chunk.length;
+  };
+
+  const courses = scanAllCourses();
+  const total = courses.reduce((sum, course) => sum + course.sections.reduce((n, sec) => n + sec.items.length, 0), 0);
+  let done = 0;
+  const seenPages = new Set();
+  const step = async () => {
+    done++;
+    search.progress = { done, total };
+    if (done % 10 === 0) await new Promise((resolve) => setImmediate(resolve)); // Let requests in
+  };
+
+  for (const course of courses) {
+    const items = course.sections.flatMap((sec) => sec.items.map((item) => ({ ...item, sectionName: sec.name })));
+
+    // Lesson pages, minus lines repeated on most pages of their section or of the course (menus, a module's
+    // outline): otherwise every saved page would match every lesson title
+    const pages = [];
+    for (const item of items.filter((i) => i.type === 'html')) {
+      try {
+        const lines = getPageText(item.path, fs.statSync(item.path)).split('\n').map((line) => line.trim()).filter(Boolean);
+        pages.push({ item, lines });
+        seenPages.add(item.path);
+      } catch (err) {
+        console.error(`[Search] Error reading ${item.path}:`, err.message);
+      }
+      await step();
+    }
+    // Returns a test for lines that appear on more than half of the given pages (when there are enough to tell)
+    const repeatedIn = (group) => {
+      const counts = new Map();
+      group.forEach(({ lines }) => new Set(lines).forEach((line) => counts.set(line, (counts.get(line) || 0) + 1)));
+      const limit = Math.max(3, group.length / 2);
+      return (line) => group.length >= 4 && counts.get(line) > limit;
+    };
+    const repeatedInCourse = repeatedIn(pages);
+    const repeatedInSection = new Map();
+    for (const page of pages) {
+      const section = page.item.sectionName;
+      if (!repeatedInSection.has(section)) {
+        repeatedInSection.set(section, repeatedIn(pages.filter((p) => p.item.sectionName === section)));
+      }
+    }
+    for (const { item, lines } of pages) {
+      const inSection = repeatedInSection.get(item.sectionName);
+      const text = lines.filter((line) => !repeatedInCourse(line) && !inSection(line)).join('\n');
+      splitIntoChunks(text).forEach((chunkText) => add(makeChunk(course, item, 'page', chunkText, null)));
+    }
+
+    for (const item of items) {
+      add(makeChunk(course, item, 'title', `${item.name} ${item.sectionName === 'General' ? '' : item.sectionName}`, null));
+      const base = item.path.slice(0, -path.extname(item.path).length);
+      // A lesson page's AI transcript is the same text, with its menus
+      const transcript = item.type === 'html' ? '' : readTextIfExists(`${base}.transcript.txt`);
+      if (transcript.trim()) {
+        const chunks = isMediaType(item.type)
+          ? chunkTimedTranscript(transcript)
+          : splitIntoChunks(transcript).map((chunkText) => ({ text: chunkText, start: null }));
+        chunks.forEach((chunk) => add(makeChunk(course, item, 'transcript', chunk.text, chunk.start, chunk.marks)));
+      }
+      const notes = readTextIfExists(`${base}.summary.md`);
+      if (notes.trim()) {
+        chunkNotes(notes).forEach((chunk) => add(makeChunk(course, item, 'notes', chunk.text, chunk.start)));
+      }
+      if (item.type !== 'html') await step();
+    }
+
+    const courseNotes = readTextIfExists(path.join(course.path, 'course.summary.md'));
+    if (courseNotes.trim()) {
+      chunkNotes(courseNotes).forEach((chunk) => add(makeChunk(course, null, 'course-notes', chunk.text, null)));
+    }
+  }
+
+  search.index = next;
+  search.builtAt = Date.now();
+  search.progress = null;
+
+  // Keep cached page text only for pages that still exist; save it if anything was added or removed
+  for (const filePath of Object.keys(pageTextCache)) {
+    if (!seenPages.has(filePath)) {
+      delete pageTextCache[filePath];
+      pageTextChanged = true;
+    }
+  }
+  if (pageTextChanged) {
+    pageTextChanged = false;
+    try {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+      fs.writeFileSync(`${PAGE_TEXT_FILE}.tmp`, JSON.stringify(pageTextCache), 'utf8');
+      fs.renameSync(`${PAGE_TEXT_FILE}.tmp`, PAGE_TEXT_FILE);
+    } catch (err) {
+      console.error('Error saving page text cache:', err);
+    }
+  }
+  console.log(`[Search] Indexed ${next.chunks.length} chunks from ${total} files.`);
+}
+
+// Builds the index if there isn't one, or refreshes it if it's older than SEARCH_REFRESH_MS
+function ensureSearchIndex() {
+  if (search.building) return search.building;
+  if (search.builtAt && Date.now() - search.builtAt < SEARCH_REFRESH_MS) return Promise.resolve();
+  search.building = buildSearchIndex()
+    .catch((err) => console.error('Error building search index:', err))
+    .finally(() => { search.building = null; });
+  return search.building;
+}
+
+// Search terms (stopwords dropped, unless that leaves nothing) and "quoted phrases"
+function parseQuery(query) {
+  const phrases = [...query.matchAll(/"([^"]+)"/g)].map((m) => m[1].toLowerCase().trim()).filter(Boolean);
+  const words = query.replace(/"[^"]*"/g, ' ').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+  const terms = [...new Set(words.filter((word) => word.length > 1 && !STOPWORDS.has(word)))];
+  return { terms: terms.length > 0 || phrases.length > 0 ? terms : [...new Set(words)], phrases };
+}
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Chunks ranked by BM25, matching each term at the start of a word (so "lesson" finds "lessons"); chunks with
+// more of the terms rank higher, and phrases must appear as written
+function searchChunks({ terms, phrases }, { courseId = null, kinds = null } = {}) {
+  const { chunks: allChunks, totalLength } = search.index;
+  const averageLength = allChunks.length ? totalLength / allChunks.length : 1;
+  const chunks = allChunks.filter((c) => (!courseId || c.courseId === courseId) && (!kinds || kinds.includes(c.kind)));
+  const patterns = terms.map((term) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(term)}`, 'gu'));
+  const termCounts = terms.map(() => new Map()); // chunk index -> occurrences
+  const candidates = [];
+  chunks.forEach((chunk, i) => {
+    if (phrases.some((phrase) => !chunk.lower.includes(phrase))) return;
+    let matched = phrases.length > 0;
+    terms.forEach((term, j) => {
+      if (!chunk.lower.includes(term)) return;
+      const count = (chunk.lower.match(patterns[j]) || []).length;
+      if (count) {
+        termCounts[j].set(i, count);
+        matched = true;
+      }
+    });
+    if (matched) candidates.push(i);
+  });
+
+  return candidates.map((i) => {
+    const chunk = chunks[i];
+    let score = phrases.length > 0 ? 1 : 0;
+    let termsFound = 0;
+    terms.forEach((term, j) => {
+      const count = termCounts[j].get(i);
+      if (!count) return;
+      termsFound++;
+      const docs = termCounts[j].size;
+      const idf = Math.log(1 + (chunks.length - docs + 0.5) / (docs + 0.5));
+      score += idf * (count * 2.2) / (count + 1.2 * (0.25 + 0.75 * chunk.length / averageLength));
+    });
+    const coverage = terms.length ? termsFound / terms.length : 1;
+    return { chunk, score: score * coverage * coverage * KIND_WEIGHTS[chunk.kind] };
+  }).sort((a, b) => b.score - a.score);
+}
+
+// About two lines of text around the first match, with the ranges of matched words to highlight
+function makeSnippet(text, { terms, phrases }, radius = 100) {
+  const lower = text.toLowerCase();
+  const needles = [...phrases, ...terms];
+  const positions = needles.map((needle) => lower.indexOf(needle)).filter((i) => i >= 0);
+  const first = positions.length ? Math.min(...positions) : 0;
+  let start = Math.max(0, first - radius);
+  let end = Math.min(text.length, first + radius * 2);
+  if (start > 0) start = text.indexOf(' ', start) + 1 || start;
+  if (end < text.length) end = Math.max(text.lastIndexOf(' ', end), first + 1);
+  const snippet = `${start > 0 ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`;
+
+  const ranges = [];
+  for (const needle of needles) {
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(needle)}[\\p{L}\\p{N}]*`, 'giu');
+    for (const match of snippet.matchAll(pattern)) ranges.push([match.index, match.index + match[0].length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const highlights = [];
+  for (const range of ranges) {
+    const last = highlights[highlights.length - 1];
+    if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+    else highlights.push(range);
+  }
+  return { snippet, highlights };
+}
+
+// The passages most relevant to a question, each labelled with its lesson and, for lectures, a timestamp link
+// the model can cite. When a question matches little (e.g. "summarize the course"), lesson notes fill in.
+function retrieveCourseExcerpts(courseId, question, budget = 60000) {
+  const query = parseQuery(question);
+  const picked = searchChunks(query, { courseId })
+    .filter(({ chunk }) => chunk.kind !== 'title') // A name alone tells the model little
+    .slice(0, 30)
+    .map(({ chunk }) => chunk);
+  if (picked.length < 5) {
+    const notes = search.index.chunks.filter((c) => c.courseId === courseId && c.kind === 'notes' && !picked.includes(c));
+    picked.push(...notes);
+  }
+
+  const parts = [];
+  let used = 0;
+  for (const chunk of picked) {
+    const where = chunk.sectionName && chunk.sectionName !== 'General' ? ` (${chunk.sectionName})` : '';
+    let source = `${chunk.kind === 'page' ? 'Page' : 'Lesson'} "${chunk.itemName}"${where}`;
+    const start = startOfMatch(chunk, query);
+    if (start !== null) {
+      const link = `timestamp:${encodeURIComponent(getRelativePathFromAbsolute(chunk.filePath))}#${Math.floor(start)}`;
+      source = `Lecture "${chunk.itemName}"${where} at [${formatSecondsToTimestamp(start).slice(1, -1)}](${link})`;
+    }
+    const part = `[${parts.length + 1}] ${source}\n${chunk.text}`;
+    if (used + part.length > budget) break;
+    parts.push(part);
+    used += part.length;
+  }
+  return parts.join('\n\n');
+}
+
+// One result per lesson (its best matching chunk, and how many others matched), best first
+app.get('/api/search', (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 200);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const kinds = SEARCH_KINDS.includes(req.query.kind) ? [req.query.kind] : null;
+  ensureSearchIndex();
+  if (!q) {
+    return res.send({ results: [], total: 0, indexing: !!search.building, progress: search.progress });
+  }
+
+  const query = parseQuery(q);
+  const byLesson = new Map();
+  for (const { chunk } of searchChunks(query, { courseId: req.query.courseId || null, kinds })) {
+    const key = chunk.filePath || `course:${chunk.courseId}`;
+    const seen = byLesson.get(key);
+    if (seen) seen.matches++;
+    else byLesson.set(key, { chunk, matches: 1 });
+  }
+  const results = [...byLesson.values()].slice(0, limit).map(({ chunk, matches }) => ({
+    courseId: chunk.courseId,
+    courseTitle: chunk.courseTitle,
+    filePath: chunk.filePath,
+    itemName: chunk.itemName,
+    itemType: chunk.itemType,
+    sectionName: chunk.sectionName,
+    kind: chunk.kind,
+    start: startOfMatch(chunk, query),
+    matches,
+    ...makeSnippet(chunk.text, query)
+  }));
+  res.send({ results, total: byLesson.size, indexing: !!search.building, progress: search.progress });
+});
+
 // Chat with entire course endpoint
 app.post('/api/course/chat', async (req, res) => {
   const { courseId, message, history } = req.body;
@@ -2240,56 +2656,26 @@ app.post('/api/course/chat', async (req, res) => {
   }
 
   try {
-    const summaryFilePath = path.join(coursePath, 'course.summary.md');
-    let contextText = '';
-
-    if (fs.existsSync(summaryFilePath)) {
-      contextText = fs.readFileSync(summaryFilePath, 'utf8');
+    // Ground the answer in the course summary (if one was generated) plus the passages most relevant to this
+    // question and the ones just before it, found with the search index
+    if (search.builtAt) {
+      ensureSearchIndex(); // Refreshes in the background if it's out of date
     } else {
-      // Fallback: search for all generated transcripts and summaries in the course
-      // (a loose-files course doesn't descend into subfolders, which hold other courses)
-      const transcripts = [];
-      const looseFiles = isLooseFilesCourse(coursePath);
-      const traverseForContext = (dir) => {
-        const items = fs.readdirSync(dir, { withFileTypes: true });
-        for (const item of items) {
-          const fullPath = path.join(dir, item.name);
-          if (item.isDirectory()) {
-            if (!looseFiles && !IGNORE_DIRS.includes(item.name.toLowerCase())) {
-              traverseForContext(fullPath);
-            }
-          } else if (item.isFile()) {
-            if (item.name.endsWith('.transcript.txt')) {
-              try {
-                const text = fs.readFileSync(fullPath, 'utf8');
-                if (text.trim()) {
-                  transcripts.push(`Lecture: ${item.name.replace('.transcript.txt', '')}\nTranscript:\n${text}`);
-                }
-              } catch (e) {
-                console.error('Error reading transcript', fullPath, e);
-              }
-            } else if (item.name.endsWith('.summary.md') && item.name !== 'course.summary.md') {
-              try {
-                const text = fs.readFileSync(fullPath, 'utf8');
-                if (text.trim()) {
-                  transcripts.push(`Lecture: ${item.name.replace('.summary.md', '')}\nSummary:\n${text}`);
-                }
-              } catch (e) {
-                console.error('Error reading summary', fullPath, e);
-              }
-            }
-          }
-        }
-      };
+      await ensureSearchIndex();
+    }
+    const summaryFilePath = path.join(coursePath, 'course.summary.md');
+    const recentQuestions = (Array.isArray(history) ? history : [])
+      .filter((item) => item.role === 'user' && typeof item.content === 'string')
+      .slice(-2)
+      .map((item) => item.content);
+    const excerpts = retrieveCourseExcerpts(courseId, [...recentQuestions, message].join(' '));
 
-      traverseForContext(coursePath);
-
-      if (transcripts.length > 0) {
-        contextText = transcripts.join('\n\n');
-        if (contextText.length > 200000) {
-          contextText = contextText.substring(0, 200000) + '\n\n[Truncated due to length]';
-        }
-      }
+    let contextText = '';
+    if (fs.existsSync(summaryFilePath)) {
+      contextText += `## Course summary\n${fs.readFileSync(summaryFilePath, 'utf8').slice(0, 30000)}\n\n`;
+    }
+    if (excerpts) {
+      contextText += `## Excerpts from the lessons\n${excerpts}`;
     }
 
     if (!contextText.trim()) {
@@ -2297,8 +2683,9 @@ app.post('/api/course/chat', async (req, res) => {
     }
 
     const systemInstruction = `You are a master AI tutor helping a student study a complete course.
-Below is the consolidated content of the course, which may include the course-level master summary, lecture transcripts, and key summaries.
+Below is context from the course: the course-level summary if one exists, and excerpts from lecture transcripts, lesson notes and lesson pages, picked for the student's question.
 Use this context to answer the student's questions about the entire course. Explain concepts clearly, relate topics across different lectures, and synthesize information.
+Each excerpt is labelled with its source. When you use an excerpt from a lecture, cite it with its timestamp link exactly as given (for example "[12:35](timestamp:...)"), so the student can jump to that moment. Never invent links.
 If the answer is not found in the course context, you may use your general knowledge, but prioritize the course content and mention when you are adding external knowledge.
 Format your responses using clean markdown (bold terms, lists, tables, code blocks).
 
@@ -2427,6 +2814,8 @@ module.exports = {
   formatSecondsToTimestamp,
   formatTranscriptSegments,
   formatSegmentsAsVtt,
+  ensureSearchIndex,
+  retrieveCourseExcerpts,
   app,
   formatTimestamp
 };

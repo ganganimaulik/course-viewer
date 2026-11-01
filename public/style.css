@@ -462,6 +462,106 @@ h1 {
   margin-bottom: 40px;
 }
 
+/* Search view */
+.search-view-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.search-input.search-input-large {
+  flex: 1;
+  max-width: none;
+  padding: 14px 18px;
+  font-size: 15px;
+}
+
+.search-status {
+  min-height: 20px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 920px;
+}
+
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 16px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  color: var(--text-main);
+  font-family: var(--font-family-body);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.search-result:hover,
+.search-result:focus-visible {
+  border-color: rgba(139, 92, 246, 0.45);
+  background: rgba(139, 92, 246, 0.06);
+}
+
+.search-result-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.search-result-title {
+  font-family: var(--font-family-headings);
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.search-result-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-badge {
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.search-badge.time {
+  background: rgba(6, 182, 212, 0.12);
+  color: #67e8f9;
+}
+
+.search-result-more {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.search-result-snippet {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.search-result-snippet mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: rgba(139, 92, 246, 0.3);
+  color: var(--text-main);
+}
+
 /* Study Activity: stat tiles and a heatmap of time studied per day */
 .study-section {
   margin-bottom: 40px;

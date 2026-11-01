@@ -21,7 +21,8 @@ A local web application designed to help you organize, play, and track learning 
 - **AI Notes & Chat**:
   - Transcribes lectures without subtitles using Whisper running on [Modal](https://modal.com), and saves the timings as a `.vtt` caption file next to the lecture.
   - Shows transcripts with clickable timestamps that follow along as the lecture plays. Lectures transcribed before captions were saved can be transcribed again from the Transcript tab.
-  - Generates lesson notes, course-wide study guides, and answers questions with [Fireworks AI](https://fireworks.ai) models.
+  - Generates lesson notes, course-wide study guides, and answers questions with [Fireworks AI](https://fireworks.ai) models. Course chat answers from the passages most relevant to your question and cites lecture timestamps you can click.
+- **Search**: One search box (press **/** anywhere) across lesson names, transcripts, AI notes and the text of lesson pages in every course. Results open the lesson, and lectures start where the match is spoken. Text from lesson pages is cached in `~/Library/Caches/course-viewer`.
 - **Desktop System Integrations**:
   - **Reveal in Finder**: Instantly highlights the current lesson file in your Mac Finder.
   - **Open in Default App**: Launches the selected file in your system's default viewer (e.g., VLC for unsupported codecs, Acrobat Reader, Chrome, etc.).

@@ -12,7 +12,7 @@ const cacheDir = path.join(tmpDir, 'cache');
 process.env.COURSE_VIEWER_DB = path.join(tmpDir, 'db.json');
 process.env.COURSE_VIEWER_CACHE = cacheDir;
 fs.writeFileSync(process.env.COURSE_VIEWER_DB, JSON.stringify({ folders: [], progress: {}, aiConfig: { llmModel: '' } }));
-const { app } = require('../server');
+const { app, ensureSearchIndex, retrieveCourseExcerpts } = require('../server');
 
 const libraryDir = path.join(tmpDir, 'library');
 const courseDir = path.join(libraryDir, 'Course A');
@@ -39,9 +39,14 @@ const postJson = (route, body, headers = {}) => fetch(`${baseUrl}${route}`, {
 beforeAll(async () => {
   fs.mkdirSync(courseDir, { recursive: true });
   fs.writeFileSync(videoPath, Buffer.alloc(size, 7));
-  fs.writeFileSync(pagePath, '<p>Lesson</p><script>fetch("/api/progress/reset", { method: "POST" })</script>');
+  fs.writeFileSync(pagePath, '<p>Photosynthesis turns light into energy.</p><script>fetch("/api/progress/reset", { method: "POST" })</script>');
   fs.writeFileSync(audioPath, Buffer.alloc(size, 7));
   fs.writeFileSync(typescriptPath, 'export const answer: number = 42;\n');
+  // A Whisper-style transcript and AI notes for the clip, for search
+  const clipBase = streamPath.slice(0, -'.ts'.length);
+  fs.writeFileSync(`${clipBase}.transcript.txt`, '[00:00] Welcome to the course.\n\n' +
+    '[00:30] Neuroplasticity is the brain\'s ability to change with practice.\n');
+  fs.writeFileSync(`${clipBase}.summary.md`, '## Key takeaways\n- [00:30](timestamp:clip.ts#30) Neuroplasticity lets the brain rewire itself.\n');
   if (hasFfmpeg) {
     execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x48:rate=5',
       '-f', 'lavfi', '-i', 'sine=duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-f', 'mpegts', streamPath]);
@@ -254,6 +259,47 @@ describe('lesson lengths', () => {
     expect(measured.durations[streamPath]).toBe(clip.duration);
     const saved = JSON.parse(fs.readFileSync(path.join(cacheDir, 'durations.json'), 'utf8'));
     expect(saved[streamPath].duration).toBe(clip.duration);
+  });
+});
+
+describe('search', () => {
+  // The first search starts building the index; ask again until it's done
+  const searchFor = async (q, params = '') => {
+    let data;
+    for (let i = 0; i < 50; i++) {
+      data = await (await fetch(`${baseUrl}/api/search?q=${encodeURIComponent(q)}${params}`)).json();
+      if (!data.indexing) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return data;
+  };
+
+  it('finds lectures by what is said in them, at the moment it is said', async () => {
+    const { results } = await searchFor('neuroplasticity');
+    const hit = results.find((r) => r.filePath === streamPath);
+    expect(hit).toMatchObject({ itemName: 'clip.ts', start: 30 });
+    expect(hit.matches).toBeGreaterThan(1); // Transcript and notes
+    expect(hit.snippet.slice(...hit.highlights[0]).toLowerCase()).toBe('neuroplasticity');
+  });
+
+  it('opens short merged transcript paragraphs at the one that matched', async () => {
+    const { results } = await searchFor('practice');
+    expect(results.find((r) => r.filePath === streamPath).start).toBe(30);
+  });
+
+  it('finds words on lesson pages, but not in their scripts', async () => {
+    expect((await searchFor('photosynthesis')).results.map((r) => r.filePath)).toEqual([pagePath]);
+    expect((await searchFor('fetch')).results).toEqual([]);
+  });
+
+  it('filters by kind, e.g. lesson names', async () => {
+    expect((await searchFor('talk', '&kind=title')).results.map((r) => r.filePath)).toEqual([audioPath]);
+  });
+
+  it('gives course chat excerpts it can cite', async () => {
+    await ensureSearchIndex();
+    const excerpts = retrieveCourseExcerpts(Buffer.from(courseDir).toString('base64url'), 'What is neuroplasticity?');
+    expect(excerpts).toContain('Lecture "clip.ts" at [00:30](timestamp:clip.ts#30)');
   });
 });
 

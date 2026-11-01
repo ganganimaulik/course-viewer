@@ -197,6 +197,10 @@ function switchView(viewId) {
     renderFullCatalog();
   } else if (viewId === 'settings') {
     renderSettings();
+  } else if (viewId === 'search') {
+    const input = document.getElementById('global-search-input');
+    input.focus();
+    input.select();
   }
 }
 
@@ -216,7 +220,7 @@ function restoreLastView() {
     }
   }
 
-  if (['dashboard', 'courses', 'settings'].includes(savedView)) {
+  if (['dashboard', 'courses', 'search', 'settings'].includes(savedView)) {
     switchView(savedView);
   }
 }
@@ -875,6 +879,130 @@ function watchMediaDurations() {
       console.error('Error loading lesson lengths:', err);
     }
   }, 8000);
+}
+
+// --- SEARCH ---
+const SEARCH_KIND_LABELS = { title: 'Lesson name', transcript: 'Transcript', notes: 'AI notes', page: 'Lesson page', 'course-notes': 'Course summary' };
+let searchRequest = null;
+let searchTimer = null;
+
+function onGlobalSearchInput() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runGlobalSearch, 250);
+}
+
+async function runGlobalSearch() {
+  clearTimeout(searchTimer);
+  const query = document.getElementById('global-search-input').value.trim();
+  const kind = document.getElementById('global-search-kind').value;
+  const status = document.getElementById('global-search-status');
+  if (searchRequest) searchRequest.abort(); // Superseded by what's typed now
+  if (!query) {
+    status.textContent = '';
+    renderSearchResults([]);
+    return;
+  }
+
+  searchRequest = new AbortController();
+  try {
+    const params = new URLSearchParams({ q: query });
+    if (kind) params.set('kind', kind);
+    const res = await fetch(`${API_BASE}/api/search?${params}`, { signal: searchRequest.signal });
+    const data = await res.json();
+    renderSearchResults(data.results);
+    status.textContent = data.total === 0 ? 'No matches.' : `${data.total} ${data.total === 1 ? 'lesson matches' : 'lessons match'}${data.total > data.results.length ? `; showing the top ${data.results.length}` : ''}.`;
+    if (data.indexing) {
+      const progress = data.progress ? ` (${data.progress.done} of ${data.progress.total} files)` : '';
+      status.textContent += ` Building the search index${progress}, so results may be incomplete...`;
+      searchTimer = setTimeout(runGlobalSearch, 3000); // Search again as the index fills in
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.error('Search failed:', err);
+    status.textContent = 'Search failed. Is the server running?';
+  }
+}
+
+// Text with the matched words wrapped in <mark>, built from text nodes so nothing in it is parsed as HTML
+function appendHighlighted(el, text, ranges) {
+  let pos = 0;
+  for (const [start, end] of ranges) {
+    if (start > pos) el.append(text.slice(pos, start));
+    const mark = document.createElement('mark');
+    mark.textContent = text.slice(start, end);
+    el.append(mark);
+    pos = end;
+  }
+  el.append(text.slice(pos));
+}
+
+function renderSearchResults(results) {
+  const list = document.getElementById('global-search-results');
+  list.innerHTML = '';
+  results.forEach((result) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'search-result';
+
+    const meta = document.createElement('div');
+    meta.className = 'search-result-meta';
+    meta.textContent = [result.courseTitle, result.sectionName && result.sectionName !== 'General' ? result.sectionName : null].filter(Boolean).join(' / ');
+
+    const title = document.createElement('div');
+    title.className = 'search-result-title';
+    title.textContent = result.itemName || 'Course summary';
+
+    const badges = document.createElement('div');
+    badges.className = 'search-result-badges';
+    const kindBadge = document.createElement('span');
+    kindBadge.className = 'search-badge';
+    kindBadge.textContent = SEARCH_KIND_LABELS[result.kind] || result.kind;
+    badges.appendChild(kindBadge);
+    if (result.start !== null) {
+      const time = document.createElement('span');
+      time.className = 'search-badge time';
+      time.textContent = `Plays from ${formatTime(result.start)}`;
+      badges.appendChild(time);
+    }
+    if (result.matches > 1) {
+      const more = document.createElement('span');
+      more.className = 'search-result-more';
+      more.textContent = `+${result.matches - 1} more ${result.matches === 2 ? 'match' : 'matches'} in this lesson`;
+      badges.appendChild(more);
+    }
+
+    const snippet = document.createElement('p');
+    snippet.className = 'search-result-snippet';
+    appendHighlighted(snippet, result.snippet, result.highlights);
+
+    card.append(meta, title, badges, snippet);
+    card.addEventListener('click', () => openSearchResult(result));
+    list.appendChild(card);
+  });
+}
+
+// Open a result's lesson, at the matching moment for lectures (or the course summary)
+function openSearchResult(result) {
+  const course = state.courses.find(c => c.id === result.courseId);
+  if (!course) {
+    showToast('That course is no longer in your watched folders');
+    return;
+  }
+  if (!result.filePath) {
+    localStorage.setItem('current-workspace-tab', 'course-summary');
+    openCourse(course.id);
+    return;
+  }
+  const item = course.sections.flatMap(s => s.items).find(i => i.path === result.filePath);
+  if (!item) {
+    showToast('That lesson is no longer in the course folder');
+    return;
+  }
+  localStorage.setItem('current-workspace-tab', LESSON_TYPES.includes(item.type) ? 'lessons' : 'resources');
+  if (result.start !== null && isMediaItem(item)) {
+    state.pendingSeekTime = result.start;
+  }
+  openCourse(course.id, item.path);
 }
 
 // --- ================== WORKSPACE VIEW ACTIONS ================== ---
@@ -1681,6 +1809,13 @@ function initKeyboardShortcuts() {
       active.tagName === 'SELECT' ||
       active.isContentEditable
     )) {
+      return;
+    }
+
+    // "/" opens search from anywhere
+    if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      switchView('search');
       return;
     }
 

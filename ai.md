@@ -101,7 +101,11 @@ File types come from `getFileType()` in `server.js`: `video`, `audio`, `pdf`, `h
 - `POST /api/video/generate-transcript` `{ path, retranscribe }`: Builds the transcript (existing file, subtitles, extracted document text, or Whisper transcription on Modal for video and audio) and summarizes it with Fireworks AI. A Whisper transcription also writes `<name>.vtt` captions; `retranscribe: true` ignores an existing transcript, for lectures transcribed before captions were saved. Returns `subtitlePath` for media.
 - `POST /api/video/pregenerate-summaries` `{ paths }`: Queues background summary generation for neighboring lessons.
 - `POST /api/video/chat` `{ path, message, history }`: Uses the Fireworks model to chat about a lesson's transcript.
-- `POST /api/course/chat` `{ courseId, message, history }`: Chatbot for the entire course context.
+- `POST /api/course/chat` `{ courseId, message, history }`: Chatbot for the entire course. Its context is `course.summary.md` (if generated) plus up to 60k characters of the passages most relevant to the question and the two before it (`retrieveCourseExcerpts()`), each labelled with its lesson and, for lectures, a `timestamp:` link the model is told to cite.
+
+### Search
+- `GET /api/search?q=<query>&kind=<title|transcript|notes|page|course-notes>&courseId=<id>&limit=<n>`: One result per lesson (its best chunk, a snippet with `highlights`, `matches`, and `start` seconds for lectures), ranked by BM25. Supports "quoted phrases". Returns `indexing: true` while the index builds.
+- The index (`buildSearchIndex()`) holds lesson names, transcripts (chunked at their `[MM:SS]` paragraphs), AI notes and lesson-page text in memory, searched by scanning. Page text drops lines repeated on most pages of a section or course (menus, module outlines) and is cached in `CACHE_DIR/page-text.json`. The index is rebuilt in the background when a search finds it more than 2 minutes old.
 - `POST /api/course/generate-summary` `{ courseId, force }`: Triggers course summarization.
 - `GET /api/course/summary-status?courseId=<id>`: Checks status of summary generation.
 
