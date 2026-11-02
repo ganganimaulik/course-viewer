@@ -24,6 +24,12 @@ describe('timestamp link tags for course-level prompts', () => {
       .toBe('See [L3 00:10] and [L1 05:00].');
   });
 
+  it('keeps tags cited back to back apart', () => {
+    const lessons = new Map([['a.mp4', 'L1']]);
+    expect(expandTimestampLinks('Both [L1 00:30][L1 01:00].', lessons))
+      .toBe('Both [00:30](timestamp:a.mp4#30), [01:00](timestamp:a.mp4#60).');
+  });
+
   it('shows a tag for a lesson it was never given as a plain time', () => {
     expect(expandTimestampLinks('As shown [L7 04:15].', new Map())).toBe('As shown 04:15.');
   });
