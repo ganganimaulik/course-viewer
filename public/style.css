@@ -1762,6 +1762,17 @@ h1 {
   padding: 0 8px;
 }
 
+/* A toggle that's switched on (captions) */
+.control-btn.active {
+  color: var(--color-secondary);
+  border-color: var(--color-secondary);
+  background: rgba(6, 182, 212, 0.15);
+}
+
+.control-btn.active:hover {
+  background: rgba(6, 182, 212, 0.25);
+}
+
 .volume-container {
   display: flex;
   align-items: center;
@@ -2653,6 +2664,20 @@ body.resizing-panel .video-extra-sidebar {
   border: 0;
   border-top: 1px solid var(--border-color);
   margin: 16px 0;
+}
+/* Answers to the review questions in AI notes, hidden until clicked */
+.markdown-body details {
+  margin: 4px 0 8px;
+  color: var(--text-muted);
+}
+.markdown-body summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-secondary);
+}
+.markdown-body details[open] summary {
+  margin-bottom: 4px;
 }
 
 /* --- SUMMARY SCOPE SELECTOR STYLES --- */

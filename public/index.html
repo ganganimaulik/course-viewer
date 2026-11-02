@@ -413,11 +413,13 @@
                               <div class="shortcut-item"><span class="shortcut-key">← / →</span><span class="shortcut-desc">Seek 10s</span></div>
                               <div class="shortcut-item"><span class="shortcut-key">↑ / ↓</span><span class="shortcut-desc">Volume +/- 5%</span></div>
                               <div class="shortcut-item"><span class="shortcut-key">[ / ]</span><span class="shortcut-desc">Speed +/- 0.1x</span></div>
+                              <div class="shortcut-item"><span class="shortcut-key">C</span><span class="shortcut-desc">Captions on / off</span></div>
                               <div class="shortcut-item"><span class="shortcut-key">F</span><span class="shortcut-desc">Fullscreen</span></div>
                               <div class="shortcut-item"><span class="shortcut-key">M</span><span class="shortcut-desc">Mute / Unmute</span></div>
                               <div class="shortcut-item"><span class="shortcut-key">P</span><span class="shortcut-desc">Picture-in-Picture</span></div>
                             </div>
                           </div>
+                          <button class="control-btn font-small" id="video-captions-btn" onclick="toggleCaptions()" title="Captions (C)" style="display: none;">CC</button>
                           <div class="speed-container">
                             <button class="control-btn font-small" id="video-speed-btn" onclick="toggleSpeedMenu()">1.0x</button>
                             <div class="speed-menu" id="speed-dropdown-menu">
@@ -601,8 +603,8 @@
 
                           <div class="chat-suggestions" id="course-chat-suggestions-list">
                             <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Provide a high-level course overview.')">Provide course overview</button>
-                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('What are the key technical concepts or terminology introduced?')">List key technical concepts</button>
-                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Synthesize a list of study review questions for this course.')">Generate a review sheet</button>
+                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('What are the key concepts and terms this course introduces?')">List key concepts</button>
+                            <button class="suggestion-tag" onclick="sendCourseQuickQuestion('Make a review sheet for this course: its key questions, each with a short answer.')">Generate a review sheet</button>
                           </div>
 
                           <div class="chat-input-wrapper">
@@ -666,9 +668,9 @@
                         <p class="empty-pane-msg">Ask questions about this lecture's transcript. Start by typing a question below or selecting a suggestion.</p>
                       </div>
                       <div class="chat-suggestions" id="chat-suggestions-list">
-                        <button class="suggestion-tag" onclick="sendQuickQuestion('Summarize the key takeaways of this lecture.')">Summarize takeaways</button>
-                        <button class="suggestion-tag" onclick="sendQuickQuestion('What are the main concepts or definitions explained?')">Explain main concepts</button>
-                        <button class="suggestion-tag" onclick="sendQuickQuestion('Formulate a few practice questions based on this video.')">Practice questions</button>
+                        <button class="suggestion-tag" onclick="sendQuickQuestion('Summarize the key takeaways of this lesson.')">Summarize takeaways</button>
+                        <button class="suggestion-tag" onclick="sendQuickQuestion('Explain the main concepts of this lesson in simple terms, with an example for each.')">Explain main concepts</button>
+                        <button class="suggestion-tag" onclick="sendQuickQuestion('Quiz me on this lesson with a few practice questions.')">Practice questions</button>
                       </div>
                       <div class="chat-input-wrapper">
                         <textarea id="chat-user-input" class="chat-input" placeholder="Ask a question about this lecture..." rows="1" onkeydown="handleChatInputKeyDown(event)"></textarea>

@@ -17,6 +17,7 @@ let state = {
   currentItem: null,
   view: 'dashboard',
   playbackRate: parseFloat(localStorage.getItem('playback-rate')) || 1.0,
+  captionsEnabled: localStorage.getItem('captions-enabled') !== 'false',
   activity: { days: {}, courses: {}, weeklyGoalHours: 5 },
   progressSaveInterval: null,
   lastSavedTime: 0,
@@ -1954,6 +1955,7 @@ function loadVideoPlayer(item) {
   if (item.subtitlePath) {
     addCaptionsTrack(video, item.subtitlePath);
   }
+  applyCaptionsSetting();
 
   video.load();
   video.play().catch(e => console.log("Autoplay blocked by browser. User gesture required."));
@@ -1965,10 +1967,30 @@ function addCaptionsTrack(video, subtitlePath) {
   track.kind = 'captions';
   track.srclang = 'en';
   track.label = 'English';
-  track.default = true;
   video.appendChild(track);
-  // "default" only applies to tracks present when the media loads; captions made mid-lesson start hidden
-  track.track.mode = 'showing';
+}
+
+// Show the lesson's captions unless the viewer turned them off, and the CC button only when there are captions.
+// The mode is set directly, as "default" only applies to tracks present when the media loads
+function applyCaptionsSetting() {
+  const track = document.querySelector('#main-video-player track');
+  if (track) track.track.mode = state.captionsEnabled ? 'showing' : 'hidden';
+  const btn = document.getElementById('video-captions-btn');
+  btn.style.display = track ? '' : 'none';
+  btn.classList.toggle('active', state.captionsEnabled);
+  btn.setAttribute('aria-pressed', String(state.captionsEnabled));
+}
+
+// Turning captions off (or back on) carries over to every lesson
+function toggleCaptions() {
+  if (!document.querySelector('#main-video-player track')) {
+    showToast('This lesson has no captions.');
+    return;
+  }
+  state.captionsEnabled = !state.captionsEnabled;
+  localStorage.setItem('captions-enabled', String(state.captionsEnabled));
+  applyCaptionsSetting();
+  showToast(state.captionsEnabled ? 'Captions on' : 'Captions off');
 }
 
 // Message over the player: a spinner while a video is converted, or a playback error with a way out
@@ -2080,6 +2102,8 @@ function initKeyboardShortcuts() {
     if (state.view !== 'workspace' || !isMediaItem(state.currentItem)) {
       return;
     }
+    // Leave the browser's own shortcuts (copy, find, print...) alone
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     const video = document.getElementById('main-video-player');
     if (!video) return;
@@ -2130,6 +2154,11 @@ function initKeyboardShortcuts() {
           setPlaybackRate(newRate);
           showToast(`Speed: ${newRate.toFixed(2)}x`);
         }
+        break;
+      case 'c':
+      case 'C':
+        e.preventDefault();
+        toggleCaptions();
         break;
       case 'f':
       case 'F':
@@ -3557,6 +3586,7 @@ function setItemCaptions(itemPath, subtitlePath) {
   const video = document.getElementById('main-video-player');
   if (state.videoItem && state.videoItem.path === itemPath && !video.querySelector('track')) {
     addCaptionsTrack(video, subtitlePath);
+    applyCaptionsSetting();
   }
 }
 
@@ -4222,6 +4252,12 @@ function renderChatMessages() {
   messagesBody.scrollTop = messagesBody.scrollHeight;
 }
 
+// The conversation so far, as sent with a question: without failed questions and their error messages, which
+// the model would otherwise read as its own replies
+function chatTurnsForAi(history) {
+  return history.filter((msg, i) => !msg.error && !(history[i + 1] && history[i + 1].error));
+}
+
 function escapeHtml(text) {
   if (!text) return '';
   return text
@@ -4287,7 +4323,7 @@ async function executeChatMessage(messageText) {
       body: JSON.stringify({
         path: state.currentItem.path,
         message: messageText,
-        history: history.slice(0, -1)
+        history: chatTurnsForAi(history.slice(0, -1))
       })
     });
 
@@ -4307,7 +4343,7 @@ async function executeChatMessage(messageText) {
     indicator.remove();
     if (state.chatHistory !== history) return;
 
-    history.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
+    history.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}`, error: true });
     renderChatMessages();
     
     const lastMsgEl = messagesBody.lastElementChild;
@@ -4438,7 +4474,7 @@ async function executeCourseChatMessage(messageText) {
       body: JSON.stringify({
         courseId: state.currentCourse.id,
         message: messageText,
-        history: history.slice(0, -1)
+        history: chatTurnsForAi(history.slice(0, -1))
       })
     });
 
@@ -4458,7 +4494,7 @@ async function executeCourseChatMessage(messageText) {
     indicator.remove();
     if (state.courseChatHistory !== history) return;
 
-    history.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}` });
+    history.push({ role: 'model', content: `Error: ${err.message || 'Could not communicate with AI assistant.'}`, error: true });
     renderCourseChatMessages();
     
     const lastMsgEl = messagesBody.lastElementChild;

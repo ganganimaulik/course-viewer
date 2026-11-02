@@ -20,12 +20,17 @@ process.env.MODAL_CONFIG_PATH = path.join(tmpDir, 'no-modal.toml');
 fs.writeFileSync(process.env.COURSE_VIEWER_DB, JSON.stringify({ folders: [], progress: {}, aiConfig: { llmModel: '' } }));
 const { app, ensureSearchIndex, retrieveCourseExcerpts, getLessonText, getRelativePathFromAbsolute } = require('../server');
 
-// Fireworks stand-in: every chat completion streams this reply, the way the real API does
+// Fireworks stand-in: every chat completion streams this reply, the way the real API does. A test can change the
+// reply, and read the prompt in the last request.
 const FAKE_NOTES = 'Stand-in notes.';
+let fakeReply = FAKE_NOTES;
+let lastFireworksRequest = null;
 const realFetch = global.fetch;
-global.fetch = (url, options) => (String(url).startsWith('https://api.fireworks.ai/')
-  ? Promise.resolve(new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: FAKE_NOTES }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
-  : realFetch(url, options));
+global.fetch = (url, options) => {
+  if (!String(url).startsWith('https://api.fireworks.ai/')) return realFetch(url, options);
+  lastFireworksRequest = JSON.parse(options.body);
+  return Promise.resolve(new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: fakeReply }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`));
+};
 
 const libraryDir = path.join(tmpDir, 'library');
 const courseDir = path.join(libraryDir, 'Course A');
@@ -336,6 +341,41 @@ describe('search', () => {
     const excerpts = retrieveCourseExcerpts(Buffer.from(courseDir).toString('base64url'), 'synaptic pruning');
     expect(excerpts).toMatch(/^\[1\] Course summary\n.*Synaptic pruning/);
     expect(excerpts).not.toContain('"null"');
+  });
+});
+
+describe('AI chat', () => {
+  const ask = async (route, body, reply) => {
+    fakeReply = reply;
+    try {
+      const res = await postJson(route, body);
+      expect(res.status).toBe(200);
+      return (await res.json()).response;
+    } finally {
+      fakeReply = FAKE_NOTES;
+    }
+  };
+
+  it('links the timestamps a lesson chat cites, and shows it its earlier replies as it wrote them', async () => {
+    const history = [
+      { role: 'user', content: 'Where does it start?' },
+      { role: 'model', content: 'At [00:00](timestamp:clip.ts#0).' }
+    ];
+    const response = await ask('/api/video/chat', { path: streamPath, message: 'What is neuroplasticity?', history }, 'See [00:30].');
+    expect(response).toBe('See [00:30](timestamp:clip.ts#30).');
+    const { messages } = lastFireworksRequest;
+    expect(messages[0].content).toContain('[00:30] Neuroplasticity');
+    expect(messages[2]).toEqual({ role: 'assistant', content: 'At [00:00].' });
+  });
+
+  it('cites lectures in course chat with short tags, which come back as links', async () => {
+    await ensureSearchIndex();
+    const courseId = Buffer.from(courseDir).toString('base64url');
+    const response = await ask('/api/course/chat', { courseId, message: 'What is neuroplasticity?' }, 'The brain changing with practice [L1 00:30].');
+    expect(response).toBe('The brain changing with practice [00:30](timestamp:clip.ts#30).');
+    const prompt = lastFireworksRequest.messages[0].content;
+    expect(prompt).toContain('Lecture "clip.ts" at [L1 00:30]');
+    expect(prompt).not.toContain('timestamp:');
   });
 });
 
