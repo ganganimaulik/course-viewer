@@ -1638,6 +1638,24 @@ function filterCourseOutline() {
   renderActiveWorkspaceOutline();
 }
 
+// Scroll the outline to the open lesson, e.g. one opened from its address, Back/Forward or autoplay, opening its folder
+// if it was collapsed. Scrolls the list itself: scrollIntoView would also scroll the app's overflow-hidden containers.
+function revealActiveOutlineItem() {
+  const row = document.querySelector('.outline-item.active');
+  const list = row && row.closest('.outline-scroller');
+  if (!list || !list.clientHeight) return; // No open lesson in the outline, or its tab isn't showing
+  row.closest('.section-accordion').classList.remove('collapsed');
+  const top = row.getBoundingClientRect().top - list.getBoundingClientRect().top; // From the top of the visible part
+  const bottom = top + row.offsetHeight;
+  if (bottom <= 0 || top >= list.clientHeight) {
+    list.scrollTop += top - (list.clientHeight - row.offsetHeight) / 2; // Off screen: bring it to the middle
+  } else if (top < 0) {
+    list.scrollTop += top; // Partly cut off (e.g. a row clicked at the edge): just show all of it
+  } else if (bottom > list.clientHeight) {
+    list.scrollTop += bottom - list.clientHeight;
+  }
+}
+
 // Update the header action button state based on the current active item progress
 function updateHeaderActionBtn() {
   const actionBtn = document.getElementById('btn-toggle-complete');
@@ -1704,6 +1722,7 @@ function selectItem(item, section = null) {
   document.querySelectorAll('.outline-item').forEach(el => {
     el.classList.toggle('active', el.dataset.path === item.path);
   });
+  revealActiveOutlineItem();
 
   // Load breadcrumbs
   document.getElementById('crumb-section').textContent = state.currentSection.name;

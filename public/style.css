@@ -70,7 +70,8 @@ body {
 }
 
 /* --- SIDEBAR PANEL STYLING --- */
-.sidebar {
+/* Not .sidebar: pdf.js's pdf_viewer.css styles that class, and its 180px min-width kept the collapsed bar wide */
+.app-sidebar {
   width: 280px;
   background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-color);
@@ -81,7 +82,7 @@ body {
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.sidebar.collapsed {
+.app-sidebar.collapsed {
   width: 80px;
   padding: 24px 16px;
 }
@@ -100,7 +101,7 @@ body {
   align-items: center;
 }
 
-.sidebar.collapsed .brand {
+.app-sidebar.collapsed .brand {
   flex-direction: column;
   gap: 16px;
   align-items: center;
@@ -117,7 +118,7 @@ body {
   flex-shrink: 0;
 }
 
-.sidebar.collapsed .logo-icon {
+.app-sidebar.collapsed .logo-icon {
   margin-right: 0;
 }
 
@@ -147,7 +148,7 @@ body {
   transform: scale(1.1);
 }
 
-.sidebar.collapsed .brand-toggle-btn:hover .toggle-icon {
+.app-sidebar.collapsed .brand-toggle-btn:hover .toggle-icon {
   transform: rotate(180deg) scale(1.1);
 }
 
@@ -167,7 +168,7 @@ body {
   transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.sidebar.collapsed .brand-name {
+.app-sidebar.collapsed .brand-name {
   opacity: 0;
   max-width: 0;
   pointer-events: none;
@@ -199,7 +200,7 @@ body {
   transition: padding 0.3s cubic-bezier(0.4, 0, 0.2, 1), gap 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s, color 0.25s, transform 0.25s;
 }
 
-.sidebar.collapsed .nav-btn {
+.app-sidebar.collapsed .nav-btn {
   padding: 12px;
   justify-content: center;
   gap: 0;
@@ -211,7 +212,7 @@ body {
   transform: translateX(4px);
 }
 
-.sidebar.collapsed .nav-btn:hover {
+.app-sidebar.collapsed .nav-btn:hover {
   transform: none;
 }
 
@@ -256,7 +257,7 @@ body {
   vertical-align: middle;
 }
 
-.sidebar.collapsed .nav-text {
+.app-sidebar.collapsed .nav-text {
   opacity: 0;
   max-width: 0;
   pointer-events: none;
@@ -266,11 +267,11 @@ body {
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.sidebar.collapsed .toggle-icon {
+.app-sidebar.collapsed .toggle-icon {
   transform: rotate(180deg);
 }
 
-.sidebar.collapsed .nav-btn:hover .toggle-icon {
+.app-sidebar.collapsed .nav-btn:hover .toggle-icon {
   transform: rotate(180deg) scale(1.1);
 }
 
@@ -283,7 +284,7 @@ body {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.sidebar.collapsed .sidebar-stats {
+.app-sidebar.collapsed .sidebar-stats {
   opacity: 0;
   max-height: 0;
   padding: 0;
@@ -1221,16 +1222,14 @@ h1 {
   transform: rotate(-90deg);
 }
 
+/* No max-height slide: it needs a height cap, which cut off the lessons of long folders */
 .section-content {
   display: flex;
   flex-direction: column;
-  max-height: 2000px;
-  overflow: hidden;
-  transition: max-height 0.3s ease-out;
 }
 
 .section-accordion.collapsed .section-content {
-  max-height: 0;
+  display: none;
 }
 
 /* Lecture Row Items */
